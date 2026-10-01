@@ -1,0 +1,26 @@
+# Secrets
+.env
+
+# Data (rebuildable from the API; keep folder placeholders)
+data/raw/*
+data/interim/*
+data/processed/*
+!data/**/.gitkeep
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# OS / editors
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

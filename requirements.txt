@@ -1,0 +1,11 @@
+cfbd
+pandas
+numpy
+pyarrow
+statsmodels
+scikit-learn
+matplotlib
+python-dotenv
+jupyter
+pytest
+ruff
