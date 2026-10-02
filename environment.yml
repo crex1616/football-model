@@ -1,0 +1,20 @@
+name: football-model
+channels:
+  - conda-forge
+dependencies:
+  - python=3.12
+  - pandas
+  - numpy
+  - pyarrow
+  - statsmodels
+  - scikit-learn
+  - matplotlib
+  - python-dotenv
+  - jupyter
+  - ipykernel
+  - pytest
+  - ruff
+  - pip
+  - pip:
+      - cfbd               # CollegeFootballData.com client (not on conda-forge)
+      - -e .               # installs src/football_model so `import football_model` works

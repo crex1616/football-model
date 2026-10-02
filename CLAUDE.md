@@ -26,7 +26,7 @@ The owner is learning machine learning. They have a strong background in regress
 - cfbd (official CollegeFootballData.com client) for data
 - pytest for tests
 
-Add a dependency only when it's needed, and add it to `requirements.txt` in the same change.
+Add a dependency only when it's needed, and add it to both `environment.yml` and `requirements.txt` in the same change. The project runs in the `football-model` conda environment (`C:SERSEX1MINIFORGE3ENVSOOTBALL-MODEL`).
 
 ## Repository layout
 

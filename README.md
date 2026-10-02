@@ -63,20 +63,21 @@ football-model/
 
 ## Setup
 
-Requires Python 3.11 or newer.
+Uses a conda environment (Python 3.12) defined in `environment.yml`. Requires [Miniforge](https://github.com/conda-forge/miniforge) or another conda install.
 
 ```bash
-git clone https://github.com/<your-username>/football-model.git
+git clone https://github.com/crex1616/football-model.git
 cd football-model
 
-python -m venv .venv
-source .venv/bin/activate          # Windows: .venv\Scripts\activate
+conda env create -f environment.yml   # also installs this package in editable mode (`import football_model`)
+conda activate football-model
 
-pip install -r requirements.txt
-pip install -e .                   # makes `import football_model` work in notebooks and scripts
-
-cp .env.example .env               # then paste your CFBD API key into .env
+cp .env.example .env                  # then paste your CFBD API key into .env
 ```
+
+After adding a package to `environment.yml`, run `conda env update -f environment.yml --prune`. In Jupyter or VS Code, choose the **Python (football-model)** kernel.
+
+`requirements.txt` is kept for plain-pip installs (`pip install -r requirements.txt && pip install -e .`).
 
 Get a free API key at [collegefootballdata.com/key](https://collegefootballdata.com/key). The free tier allows 1,000 calls per month, which is plenty because every pull is cached in `data/raw/`.
 
