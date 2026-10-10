@@ -13,7 +13,8 @@ RAW_DIR = DATA_DIR / "raw"
 INTERIM_DIR = DATA_DIR / "interim"
 PROCESSED_DIR = DATA_DIR / "processed"
 PREDICTIONS_DIR = ROOT / "predictions"
-FIGURES_DIR = ROOT / "reports" / "figures"
+REPORTS_DIR = ROOT / "reports"
+FIGURES_DIR = REPORTS_DIR / "figures"
 
 # The canonical games table built by clean.py: one row per completed game, home perspective.
 GAMES_TABLE_PATH = PROCESSED_DIR / "games.parquet"
@@ -25,3 +26,10 @@ COVID_SEASON = 2020
 
 # Seed for anything random (simulations, boosting, sampling) so results are reproducible.
 RANDOM_SEED = 42
+
+# Validation splits (walk-forward). 2014 is a burn-in season for ratings that start
+# from scratch, so it is never scored. Hyperparameters are tuned on TUNING_SEASONS;
+# TEST_SEASON (the most recent completed season) is scored rarely, as a final check.
+BURN_IN_SEASON = FIRST_SEASON
+TEST_SEASON = CURRENT_SEASON - 1
+TUNING_SEASONS = [s for s in range(BURN_IN_SEASON + 1, TEST_SEASON) if s != COVID_SEASON]

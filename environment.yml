@@ -8,6 +8,7 @@ dependencies:
   - pyarrow
   - statsmodels
   - scikit-learn
+  - scipy
   - matplotlib
   - python-dotenv
   - jupyter
