@@ -89,7 +89,7 @@ All data comes from [CollegeFootballData.com](https://collegefootballdata.com) t
 
 | Phase | Status |
 | --- | --- |
-| 1. Data pipeline | In progress |
+| 1. Data pipeline | Done |
 | 2. Elo baseline | Not started |
 | 3. Point-spread regression | Not started |
 | 4. Win probabilities | Not started |
