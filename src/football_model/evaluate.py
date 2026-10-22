@@ -181,6 +181,42 @@ def score_by_week(
     return table
 
 
+def score_probs_by_week(
+    games: pd.DataFrame, prob_cols: list[str], seasons: Iterable[int] | None = None
+) -> pd.DataFrame:
+    """Log loss of several probability models and the market, by part of the season.
+
+    Args:
+        games: Must contain season, week, season_type, home_win, market_spread,
+            market_prob_home, and every column in prob_cols.
+        prob_cols: Columns with each model's home win probability.
+        seasons: Seasons to score; all seasons in `games` if None.
+
+    Returns:
+        One row per week bucket plus an "all" row. Columns: games, one log-loss column
+        per model, and market. Only games with a market line are scored.
+    """
+    scored = games[games["market_spread"].notna()]
+    if seasons is not None:
+        scored = scored[scored["season"].isin(list(seasons))]
+    scored = scored.assign(bucket=week_bucket(scored))
+
+    def one_block(block: pd.DataFrame) -> dict:
+        row = {"games": len(block)}
+        for col in prob_cols:
+            row[col] = log_loss(block["home_win"], block[col])
+        row["market"] = log_loss(block["home_win"], block["market_prob_home"])
+        return row
+
+    order = ["weeks 1-4", "weeks 5-8", "weeks 9+", "postseason"]
+    rows = {b: one_block(block) for b, block in scored.groupby("bucket") if b in order}
+    rows = {b: rows[b] for b in order if b in rows}
+    rows["all"] = one_block(scored)
+    table = pd.DataFrame.from_dict(rows, orient="index")
+    table.index.name = "bucket"
+    return table
+
+
 def score_by_spread_size(
     games: pd.DataFrame, spread_cols: list[str], seasons: Iterable[int] | None = None
 ) -> pd.DataFrame:
