@@ -91,7 +91,7 @@ All data comes from [CollegeFootballData.com](https://collegefootballdata.com) t
 | --- | --- |
 | 1. Data pipeline | Done |
 | 2. Elo baseline | Done |
-| 3. Point-spread regression | Not started |
+| 3. Point-spread regression | Done |
 | 4. Win probabilities | Not started |
 | 5. Features and ML models | Not started |
 | 6. Season simulation | Not started |

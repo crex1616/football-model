@@ -90,7 +90,7 @@ def add_market_prob(games: pd.DataFrame, fit_seasons: Iterable[int]) -> pd.DataF
 
 def score_seasons(
     games: pd.DataFrame,
-    prob_col: str,
+    prob_col: str | None,
     spread_col: str | None = None,
     seasons: Iterable[int] | None = None,
 ) -> pd.DataFrame:
@@ -99,29 +99,29 @@ def score_seasons(
     Only games that have a market line are scored, so the comparison is fair.
 
     Args:
-        games: Must contain season, home_win, margin, market_spread,
-            market_prob_home, and the model's prob_col (and spread_col if given).
-        prob_col: Column with the model's home win probability.
+        games: Must contain season, margin, market_spread, and the model's columns;
+            with prob_col, also home_win and market_prob_home.
+        prob_col: Column with the model's home win probability, or None for a
+            spread-only model (scored on MAE alone).
         spread_col: Optional column with the model's expected home margin.
         seasons: Seasons to score; all seasons in `games` if None.
 
     Returns:
-        One row per season plus an "all" row. Columns: games, model_log_loss,
-        market_log_loss, model_brier, market_brier, and (with spread_col) model_mae,
-        market_mae.
+        One row per season plus an "all" row. Columns: games; with prob_col,
+        model_log_loss, market_log_loss, model_brier, market_brier; with spread_col,
+        model_mae, market_mae.
     """
     scored = games[games["market_spread"].notna()]
     if seasons is not None:
         scored = scored[scored["season"].isin(list(seasons))]
 
     def one_block(block: pd.DataFrame) -> dict:
-        row = {
-            "games": len(block),
-            "model_log_loss": log_loss(block["home_win"], block[prob_col]),
-            "market_log_loss": log_loss(block["home_win"], block["market_prob_home"]),
-            "model_brier": brier_score(block["home_win"], block[prob_col]),
-            "market_brier": brier_score(block["home_win"], block["market_prob_home"]),
-        }
+        row = {"games": len(block)}
+        if prob_col is not None:
+            row["model_log_loss"] = log_loss(block["home_win"], block[prob_col])
+            row["market_log_loss"] = log_loss(block["home_win"], block["market_prob_home"])
+            row["model_brier"] = brier_score(block["home_win"], block[prob_col])
+            row["market_brier"] = brier_score(block["home_win"], block["market_prob_home"])
         if spread_col is not None:
             row["model_mae"] = mae(block["margin"], block[spread_col])
             row["market_mae"] = mae(block["margin"], block["market_spread"])
@@ -131,6 +131,53 @@ def score_seasons(
     rows["all"] = one_block(scored)
     table = pd.DataFrame.from_dict(rows, orient="index")
     table.index.name = "season"
+    return table
+
+
+def week_bucket(games: pd.DataFrame) -> pd.Series:
+    """Label each game's part of the season: "weeks 1-4", "weeks 5-8", "weeks 9+", "postseason"."""
+    labels = pd.cut(
+        games["week"], bins=[0, 4, 8, np.inf], labels=["weeks 1-4", "weeks 5-8", "weeks 9+"]
+    ).astype(str)
+    return labels.where(games["season_type"] != "postseason", "postseason")
+
+
+def score_by_week(
+    games: pd.DataFrame, spread_cols: list[str], seasons: Iterable[int] | None = None
+) -> pd.DataFrame:
+    """MAE of several spread models and the market, by part of the season.
+
+    Early-season games are where ratings know the least, so this shows where a model
+    gains or loses ground on the market. Only games with a market line are scored.
+
+    Args:
+        games: Must contain season, week, season_type, margin, market_spread, and
+            every column in spread_cols.
+        spread_cols: Columns with each model's expected home margin.
+        seasons: Seasons to score; all seasons in `games` if None.
+
+    Returns:
+        One row per week bucket plus an "all" row. Columns: games, one MAE column per
+        model, and market.
+    """
+    scored = games[games["market_spread"].notna()]
+    if seasons is not None:
+        scored = scored[scored["season"].isin(list(seasons))]
+    scored = scored.assign(bucket=week_bucket(scored))
+
+    def one_block(block: pd.DataFrame) -> dict:
+        row = {"games": len(block)}
+        for col in spread_cols:
+            row[col] = mae(block["margin"], block[col])
+        row["market"] = mae(block["margin"], block["market_spread"])
+        return row
+
+    order = ["weeks 1-4", "weeks 5-8", "weeks 9+", "postseason"]
+    rows = {b: one_block(block) for b, block in scored.groupby("bucket") if b in order}
+    rows = {b: rows[b] for b in order if b in rows}
+    rows["all"] = one_block(scored)
+    table = pd.DataFrame.from_dict(rows, orient="index")
+    table.index.name = "bucket"
     return table
 
 

@@ -48,3 +48,36 @@ def test_score_seasons_skips_games_without_a_line():
     assert table.loc["all", "games"] == 2
     assert table.loc["all", "model_mae"] == pytest.approx((2 + 1) / 2)
     assert table.loc["all", "market_mae"] == pytest.approx((4 + 2) / 2)
+
+
+def test_score_seasons_spread_only():
+    games = pd.DataFrame(
+        {
+            "season": [2024, 2024],
+            "margin": [7, -3],
+            "market_spread": [3.0, -1.0],
+            "model_spread": [5.0, -2.0],
+        }
+    )
+    table = evaluate.score_seasons(games, None, "model_spread")
+    assert "model_log_loss" not in table.columns
+    assert table.loc["all", "model_mae"] == pytest.approx(1.5)
+
+
+def test_score_by_week_buckets():
+    games = pd.DataFrame(
+        {
+            "season": [2024] * 4,
+            "week": [1, 6, 12, 1],
+            "season_type": ["regular", "regular", "regular", "postseason"],
+            "margin": [10, 0, -7, 3],
+            "market_spread": [7.0, 1.0, -7.0, np.nan],
+            "model_spread": [4.0, 0.0, -5.0, 3.0],
+        }
+    )
+    table = evaluate.score_by_week(games, ["model_spread"])
+
+    assert list(table.index) == ["weeks 1-4", "weeks 5-8", "weeks 9+", "all"]
+    assert table.loc["weeks 1-4", "model_spread"] == pytest.approx(6.0)
+    assert table.loc["weeks 1-4", "market"] == pytest.approx(3.0)
+    assert table.loc["all", "games"] == 3
