@@ -81,3 +81,21 @@ def test_score_by_week_buckets():
     assert table.loc["weeks 1-4", "model_spread"] == pytest.approx(6.0)
     assert table.loc["weeks 1-4", "market"] == pytest.approx(3.0)
     assert table.loc["all", "games"] == 3
+
+
+def test_score_by_spread_size_buckets():
+    games = pd.DataFrame(
+        {
+            "season": [2024] * 4,
+            "margin": [3, -10, 35, 20],
+            "market_spread": [-7.0, -10.0, 30.0, np.nan],
+            "model_spread": [0.0, -12.0, 40.0, 20.0],
+        }
+    )
+    table = evaluate.score_by_spread_size(games, ["model_spread"])
+
+    # |-7| falls in 0-7 (upper edge included), |-10| in 7-14, 30 in 28+; NaN line dropped.
+    assert list(table.index) == ["0-7", "7-14", "28+", "all"]
+    assert table.loc["0-7", "model_spread"] == pytest.approx(3.0)
+    assert table.loc["28+", "market"] == pytest.approx(5.0)
+    assert table.loc["all", "games"] == 3

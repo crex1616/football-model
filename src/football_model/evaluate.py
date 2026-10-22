@@ -181,6 +181,45 @@ def score_by_week(
     return table
 
 
+def score_by_spread_size(
+    games: pd.DataFrame, spread_cols: list[str], seasons: Iterable[int] | None = None
+) -> pd.DataFrame:
+    """MAE of several spread models and the market, by size of the market spread.
+
+    Shows where a model wins or loses: close games vs. lopsided mismatches. Buckets are
+    by |market_spread|: 0-7, 7-14, 14-21, 21-28, 28+ (each includes its upper edge).
+
+    Args:
+        games: Must contain season, margin, market_spread, and every column in spread_cols.
+        spread_cols: Columns with each model's expected home margin.
+        seasons: Seasons to score; all seasons in `games` if None.
+
+    Returns:
+        One row per bucket plus an "all" row. Columns: games, one MAE column per model,
+        and market.
+    """
+    scored = games[games["market_spread"].notna()]
+    if seasons is not None:
+        scored = scored[scored["season"].isin(list(seasons))]
+    labels = ["0-7", "7-14", "14-21", "21-28", "28+"]
+    bucket = pd.cut(
+        scored["market_spread"].abs(), bins=[-np.inf, 7, 14, 21, 28, np.inf], labels=labels
+    )
+
+    def one_block(block: pd.DataFrame) -> dict:
+        row = {"games": len(block)}
+        for col in spread_cols:
+            row[col] = mae(block["margin"], block[col])
+        row["market"] = mae(block["margin"], block["market_spread"])
+        return row
+
+    rows = {b: one_block(block) for b, block in scored.groupby(bucket, observed=True)}
+    rows["all"] = one_block(scored)
+    table = pd.DataFrame.from_dict(rows, orient="index")
+    table.index.name = "abs_market_spread"
+    return table
+
+
 def calibration_plot(
     y: np.ndarray | pd.Series,
     p: np.ndarray | pd.Series,

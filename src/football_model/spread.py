@@ -28,6 +28,18 @@ answer; the penalty picks one. Only rating *differences* mean anything.
 Unlike Elo, which updates once per game and never looks back, this refits on every game
 played so far each week, so strength of schedule flows both ways: if a team you beat in
 week 2 turns out to be strong, the week-8 refit raises the credit for that win.
+
+Two models live here:
+
+- The ridge model, SpreadParams(): squared loss, so a result 40 points better than
+  expected pulls the ratings twice as hard as one 20 points better.
+- The Huber model, HUBER_PARAMS: Huber loss, the robust-regression (M-estimator) fix for
+  blowouts and garbage-time scoring. Residuals up to c points are squared as usual;
+  beyond c the loss grows only linearly, so any result more than c points better than
+  expected counts as "c points better" toward the ratings. This caps the *surprise*,
+  not the margin: a 40-point favorite still gets a 40-point predicted spread. (Clipping
+  the margin itself, margin_cap, was tested in Phase 3 and hurt badly, because it also
+  caps every prediction for a mismatch.)
 """
 
 from dataclasses import dataclass
@@ -54,6 +66,8 @@ class SpreadParams:
         half_life_weeks: If set, a game played this many weeks before the prediction gets
             half the weight of a game played this week (weighted least squares). None
             weights every game equally.
+        huber_c: If set, use Huber loss with threshold c points instead of squared loss
+            (see huber_weights). None is the plain ridge model.
     """
 
     # Defaults are the best stage-1 settings from scripts/tune_spread.py (MAE on
@@ -63,6 +77,14 @@ class SpreadParams:
     revert: float = 0.1
     margin_cap: float | None = None
     half_life_weeks: float | None = None
+    huber_c: float | None = None
+
+
+# The Huber model: the same ridge regression with Huber loss. Settings are the best from
+# scripts/tune_spread_huber.py (MAE on 2015-2024 excl. 2020). SpreadParams() remains
+# the plain ridge model.
+# c = 21 beat 14 and 28 but tied ridge: tuning MAE 13.350 vs. 13.356.
+HUBER_PARAMS = SpreadParams(alpha=3.0, revert=0.1, huber_c=21.0)
 
 
 def design_matrix(games: pd.DataFrame, teams: list[str]) -> tuple[pd.DataFrame, pd.Series]:
@@ -99,11 +121,33 @@ def recency_weights(
     return 0.5 ** (weeks_ago / half_life_weeks)
 
 
+def huber_weights(residuals: np.ndarray, c: float) -> np.ndarray:
+    """IRLS weights for Huber loss: 1 where |residual| <= c, else c / |residual|.
+
+    Weighted least squares with these weights has the same first-order conditions as
+    Huber loss, so a game with residual 2c gets weight 1/2 and pulls the fit as hard
+    as a residual of c would. Games inside c are untouched.
+    """
+    abs_r = np.abs(residuals)
+    return np.where(abs_r <= c, 1.0, c / np.maximum(abs_r, 1e-12))
+
+
+def _ridge_solve(
+    x: np.ndarray, y: np.ndarray, w: np.ndarray, m: np.ndarray, alpha: float
+) -> np.ndarray:
+    """b = m + (X'WX + alpha I)^-1 X'W (y - X m)."""
+    xtw = x.T * w
+    lhs = xtw @ x + alpha * np.eye(x.shape[1])
+    return m + np.linalg.solve(lhs, xtw @ (y - x @ m))
+
+
 def fit_ratings(
     train: pd.DataFrame,
     prior: pd.Series,
     params: SpreadParams,
     as_of: pd.Timestamp | None = None,
+    max_iter: int = 20,
+    tol: float = 1e-4,
 ) -> pd.Series:
     """Fit ratings on `train` by ridge regression, shrinking toward `prior`.
 
@@ -111,12 +155,19 @@ def fit_ratings(
     is shrunk toward its prior too, so a week-2 refit on a handful of games can't swing
     it far from last season's value.
 
+    With params.huber_c set, the loss is Huber instead of squared, solved by iteratively
+    reweighted least squares (IRLS, as in statsmodels' RLM): fit, compute residuals,
+    downweight games with |residual| > c (huber_weights), refit, and repeat until the
+    coefficients stop moving.
+
     Args:
         train: Games to fit on (home_team, away_team, neutral_site, margin, start_date).
         prior: Prior mean for each coefficient. Index: "home_field" then every team.
-        params: Model settings (alpha, margin_cap, half_life_weeks).
+        params: Model settings (alpha, margin_cap, half_life_weeks, huber_c).
         as_of: Reference time for recency weights (the next kickoff). Needed only when
             params.half_life_weeks is set.
+        max_iter: Maximum IRLS iterations (Huber only).
+        tol: Stop IRLS once no coefficient moves more than this many points.
 
     Returns:
         Fitted coefficients, same index as `prior`: home field and team ratings in points.
@@ -131,12 +182,20 @@ def fit_ratings(
     w = recency_weights(train["start_date"], as_of, params.half_life_weeks)
 
     x = X.to_numpy()
+    y_arr = y.to_numpy()
     m = prior.to_numpy()
-    residual = y.to_numpy() - x @ m
-    xtw = x.T * w
-    lhs = xtw @ x + params.alpha * np.eye(x.shape[1])
-    deviation = np.linalg.solve(lhs, xtw @ residual)
-    return pd.Series(m + deviation, index=prior.index)
+    b = _ridge_solve(x, y_arr, w, m, params.alpha)
+
+    if params.huber_c is not None:
+        for _ in range(max_iter):
+            robust = huber_weights(y_arr - x @ b, params.huber_c)
+            b_new = _ridge_solve(x, y_arr, w * robust, m, params.alpha)
+            converged = np.max(np.abs(b_new - b)) < tol
+            b = b_new
+            if converged:
+                break
+
+    return pd.Series(b, index=prior.index)
 
 
 def season_prior(last_fit: pd.Series | None, teams: list[str], revert: float) -> pd.Series:

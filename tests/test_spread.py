@@ -145,3 +145,64 @@ def test_season_prior_reverts_and_handles_new_teams():
     assert prior["B"] == pytest.approx(-3.0)
     assert prior["FCS"] == pytest.approx(-26.0)
     assert prior["New"] == pytest.approx(-26.0)
+
+
+def test_default_params_are_plain_ridge():
+    assert spread.SpreadParams().huber_c is None
+    assert spread.HUBER_PARAMS.huber_c is not None
+
+
+def test_huber_weights_hand_calculation():
+    # c = 10: residuals inside c keep weight 1; residual 20 (= 2c) gets 1/2; -40 gets 1/4.
+    w = spread.huber_weights(np.array([0.0, 5.0, -10.0, 20.0, -40.0]), c=10.0)
+    assert w == pytest.approx([1.0, 1.0, 1.0, 0.5, 0.25])
+
+
+def test_huber_with_huge_c_equals_ridge():
+    teams = ["A", "B", "C"]
+    ridge = spread.fit_ratings(THREE_TEAMS, zero_prior(teams), spread.SpreadParams(alpha=2.0))
+    huber = spread.fit_ratings(
+        THREE_TEAMS, zero_prior(teams), spread.SpreadParams(alpha=2.0, huber_c=1e6)
+    )
+    assert huber.to_numpy() == pytest.approx(ridge.to_numpy())
+
+
+def test_huber_discounts_a_blowout():
+    # Four ordinary results plus one 70-point blowout by A. Under squared loss the
+    # blowout drags A's rating up a lot; under Huber it counts only as a c-point surprise.
+    games = make_games(
+        [
+            (2024, 1, "A", "B", 7, True),
+            (2024, 1, "C", "D", 3, True),
+            (2024, 2, "B", "C", 4, True),
+            (2024, 2, "D", "A", -6, True),
+            (2024, 3, "A", "C", 70, True),
+        ]
+    )
+    teams = ["A", "B", "C", "D"]
+    ridge = spread.fit_ratings(games, zero_prior(teams), spread.SpreadParams(alpha=0.5))
+    huber = spread.fit_ratings(games, zero_prior(teams), spread.SpreadParams(alpha=0.5, huber_c=7))
+    assert huber["A"] - huber["C"] < ridge["A"] - ridge["C"]
+
+
+def test_huber_does_not_cap_predictions():
+    # A beats B by exactly 40 every week at neutral sites. Every residual is near 0, so
+    # Huber matches ridge and the next season's prior spread is still ~40 (a margin cap
+    # of 14 would cap it at 14).
+    games = make_games(
+        [(2023, w, "A", "B", 40, True) for w in range(1, 6)] + [(2024, 1, "A", "B", 0, True)]
+    )
+    params = spread.SpreadParams(alpha=1e-6, revert=0.0, huber_c=14.0)
+    pred = spread.run_spread(games, params).iloc[-1]
+    assert pred["spread_pred"] == pytest.approx(40.0, abs=1e-2)
+
+
+def test_huber_no_leakage_from_later_games():
+    params = spread.SpreadParams(alpha=1.0, huber_c=5.0)
+    base = spread.run_spread(THREE_TEAMS, params)
+    changed = THREE_TEAMS.copy()
+    changed.loc[changed["game_id"] == 3, "margin"] = -40
+    after = spread.run_spread(changed, params)
+
+    early = base["week"] <= 2
+    assert after.loc[early, "spread_pred"].tolist() == base.loc[early, "spread_pred"].tolist()
