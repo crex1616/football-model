@@ -103,6 +103,22 @@ def flatten_lines(records: list[dict]) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def flatten_records(records: list[dict]) -> pd.DataFrame:
+    """Flatten nested records to one row per record, nested keys joined with dots.
+
+    For example, an advanced-stats record {"team": "X", "offense": {"ppa": 0.2}}
+    becomes columns `team` and `offense.ppa`. Values are not changed; this is only a
+    reshape. An empty response becomes an empty DataFrame.
+
+    Args:
+        records: Dicts as returned by _to_records.
+
+    Returns:
+        DataFrame with one row per record.
+    """
+    return pd.json_normalize(records)
+
+
 def load_games(season: int) -> pd.DataFrame:
     """Load every game involving an FBS team for one season (regular + postseason).
 
@@ -148,3 +164,127 @@ def load_lines(season: int) -> pd.DataFrame:
         return flatten_lines(_to_records(lines))
 
     return _cached(config.RAW_DIR / f"lines_{season}.parquet", fetch)
+
+
+def load_advanced_game_stats(season: int) -> pd.DataFrame:
+    """Load per-game advanced stats (EPA/PPA per play, success rate, ...) for one season.
+
+    One row per team per game, with nested offense/defense stats flattened to columns
+    like `offense.ppa` and `defense.successRate`. Garbage-time plays are excluded:
+    scoring in a decided game says little about team strength.
+
+    Costs one API call the first time; afterward it reads
+    data/raw/advanced_game_stats_{season}.parquet.
+
+    Args:
+        season: Season year, e.g. 2024.
+
+    Returns:
+        Raw advanced game stats, CFBD column names.
+    """
+
+    def fetch() -> pd.DataFrame:
+        with get_api_client() as client:
+            stats = cfbd.StatsApi(client).get_advanced_game_stats(
+                year=season, season_type=cfbd.SeasonType.BOTH, exclude_garbage_time=True
+            )
+        return flatten_records(_to_records(stats))
+
+    return _cached(config.RAW_DIR / f"advanced_game_stats_{season}.parquet", fetch)
+
+
+def load_recruiting(season: int) -> pd.DataFrame:
+    """Load team recruiting rankings (247Sports composite) for one recruiting class.
+
+    Costs one API call the first time; afterward it reads
+    data/raw/recruiting_{season}.parquet.
+
+    Args:
+        season: Recruiting class year, e.g. 2024 (players who enrolled for the 2024 season).
+
+    Returns:
+        One row per team: year, rank, team, points.
+    """
+
+    def fetch() -> pd.DataFrame:
+        with get_api_client() as client:
+            rankings = cfbd.RecruitingApi(client).get_team_recruiting_rankings(year=season)
+        return flatten_records(_to_records(rankings))
+
+    return _cached(config.RAW_DIR / f"recruiting_{season}.parquet", fetch)
+
+
+def load_talent(season: int) -> pd.DataFrame:
+    """Load the team talent composite (roster-wide recruiting ratings) for one season.
+
+    Costs one API call the first time; afterward it reads data/raw/talent_{season}.parquet.
+
+    Args:
+        season: Season year, e.g. 2024.
+
+    Returns:
+        One row per team: year, team, talent.
+    """
+
+    def fetch() -> pd.DataFrame:
+        with get_api_client() as client:
+            talent = cfbd.TeamsApi(client).get_talent(year=season)
+        return flatten_records(_to_records(talent))
+
+    return _cached(config.RAW_DIR / f"talent_{season}.parquet", fetch)
+
+
+def load_returning_production(season: int) -> pd.DataFrame:
+    """Load returning production (share of last season's PPA and usage returning).
+
+    Known before the season starts, so it is a valid preseason feature.
+
+    Costs one API call the first time; afterward it reads
+    data/raw/returning_production_{season}.parquet.
+
+    Args:
+        season: Season year, e.g. 2024 (production returning from 2023).
+
+    Returns:
+        One row per team, CFBD column names (percentPPA, usage, ...).
+    """
+
+    def fetch() -> pd.DataFrame:
+        with get_api_client() as client:
+            returning = cfbd.PlayersApi(client).get_returning_production(year=season)
+        return flatten_records(_to_records(returning))
+
+    return _cached(config.RAW_DIR / f"returning_production_{season}.parquet", fetch)
+
+
+def load_venues() -> pd.DataFrame:
+    """Load every venue with its location (one API call the first time).
+
+    Returns:
+        One row per venue: id, name, city, state, latitude/longitude, and more.
+    """
+
+    def fetch() -> pd.DataFrame:
+        with get_api_client() as client:
+            venues = cfbd.VenuesApi(client).get_venues()
+        return flatten_records(_to_records(venues))
+
+    return _cached(config.RAW_DIR / "venues.parquet", fetch)
+
+
+def load_teams() -> pd.DataFrame:
+    """Load every team in every division with its home location (one API call the first time).
+
+    All divisions are included so that FCS opponents, which are pooled as "FCS" in the
+    games table, can still be located by their CFBD id.
+
+    Returns:
+        One row per team: id, school, classification, conference, location fields.
+    """
+
+    def fetch() -> pd.DataFrame:
+        with get_api_client() as client:
+            teams = cfbd.TeamsApi(client).get_teams()
+        return flatten_records(_to_records(teams))
+
+    return _cached(config.RAW_DIR / "teams.parquet", fetch)

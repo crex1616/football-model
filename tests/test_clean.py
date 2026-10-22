@@ -52,6 +52,9 @@ def make_raw_games() -> pd.DataFrame:
             "startDate": "2024-08-31T23:00:00.000Z",
             "completed": True,
             "neutralSite": False,
+            "venueId": 3001,
+            "homeId": 2006,
+            "awayId": 2142,
             "homeTeam": "Akron",
             "homeClassification": "fbs",
             "homePoints": 10.0,
@@ -114,6 +117,16 @@ def test_clean_games_maps_fcs_and_keeps_neutral_flag():
     assert games.loc[3, "home_team"] == "Akron"
     assert bool(games.loc[1, "neutral_site"]) is True
     assert bool(games.loc[2, "neutral_site"]) is False
+
+
+def test_clean_games_keeps_ids_when_fcs_is_pooled():
+    games = clean.clean_games(make_raw_games()).set_index("game_id")
+
+    # Colgate becomes "FCS", but its CFBD id survives for location lookups.
+    assert games.loc[3, "away_team"] == "FCS"
+    assert games.loc[3, "away_id"] == 2142
+    assert games.loc[3, "home_id"] == 2006
+    assert games.loc[3, "venue_id"] == 3001
 
 
 def test_clean_games_does_not_mutate_input():

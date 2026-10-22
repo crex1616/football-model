@@ -65,3 +65,43 @@ def test_flatten_lines_one_row_per_provider():
     assert set(df["provider"]) == {"Bovada", "DraftKings"}
     assert (df["id"] == 10).all()
     assert "lines" not in df.columns
+
+
+def test_flatten_records_joins_nested_keys():
+    records = [
+        {"gameId": 1, "team": "A", "offense": {"ppa": 0.2, "successRate": 0.45}},
+        {"gameId": 1, "team": "B", "offense": {"ppa": -0.1, "successRate": 0.38}},
+    ]
+    df = data.flatten_records(records)
+
+    assert list(df.columns) == ["gameId", "team", "offense.ppa", "offense.successRate"]
+    assert df["offense.ppa"].tolist() == [0.2, -0.1]
+
+
+def test_flatten_records_empty_response():
+    assert data.flatten_records([]).empty
+
+
+def test_phase5_loaders_use_their_cache_files(monkeypatch):
+    seen = []
+
+    def fake_cached(path, fetch_fn):
+        seen.append(path.name)
+        return pd.DataFrame()
+
+    monkeypatch.setattr(data, "_cached", fake_cached)
+    data.load_advanced_game_stats(2024)
+    data.load_recruiting(2024)
+    data.load_talent(2024)
+    data.load_returning_production(2024)
+    data.load_venues()
+    data.load_teams()
+
+    assert seen == [
+        "advanced_game_stats_2024.parquet",
+        "recruiting_2024.parquet",
+        "talent_2024.parquet",
+        "returning_production_2024.parquet",
+        "venues.parquet",
+        "teams.parquet",
+    ]

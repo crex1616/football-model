@@ -122,6 +122,8 @@ P(home win) = Φ(predicted_margin / σ)
 
 Compare ridge regression, (penalized) logistic regression, and LightGBM on the same walk-forward splits. Candidate features: rating difference, opponent-adjusted EPA per play, success rate, turnover margin, rest days, travel distance, recruiting composite, returning production.
 
+Detailed plan: [phase5-plan.md](phase5-plan.md).
+
 ### Phase 6: Season simulation
 
 Simulate the remaining schedule 10,000 times, applying tiebreakers and championship games. Let ratings move within each simulation. Approximate committee playoff selection with a rule, checking the current format first.

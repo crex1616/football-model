@@ -26,6 +26,11 @@ GAME_COLUMNS = {
     "neutralSite": "neutral_site",
     "conferenceGame": "conference_game",
     "venue": "venue",
+    # CFBD ids. home_id/away_id keep the real school even after non-FBS teams are
+    # pooled as "FCS", so their locations can still be looked up (travel distance).
+    "venueId": "venue_id",
+    "homeId": "home_id",
+    "awayId": "away_id",
     "homeTeam": "home_team",
     "homeConference": "home_conference",
     "homeClassification": "home_classification",
