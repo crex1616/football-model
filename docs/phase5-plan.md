@@ -101,7 +101,23 @@ trained on earlier seasons only; each group is kept only if log loss improves.
   (tuned by pre-game prediction error). 2024 ratings pass a sanity check (top
   offenses Ohio State, Oregon, Alabama; top defenses Notre Dame, Texas, Penn State).
 - Calibration: `reports/figures/stack_calibration.png`, close to the diagonal.
-- The 2025 test season has not been scored yet.
+- **2025 test season (scored once, Oct 27, 2026): the gain did not hold up.**
+
+  | 2025, 934 games with a line | Log loss | Brier | MAE | Log loss, weeks 1-4 |
+  |---|---|---|---|---|
+  | Baseline (Phase 4) | **0.4758** | **0.1589** | 12.365 | **0.3694** |
+  | Stack (all four groups) | 0.4781 | 0.1595 | **12.340** | 0.3760 |
+  | Market (closing line) | 0.4668 | 0.1565 | 11.897 | 0.3465 |
+
+  Paired per-game difference, stack minus baseline (SE = sd / sqrt(n)): tuning seasons
+  -0.0048 (SE 0.0014, t = -3.5); 2025 +0.0023 (SE 0.0034, t = +0.7). One season can't
+  separate a small gain from zero, but the tuning-season gain sits about 2 SE below the
+  2025 result, so some of it was probably optimism from tuning and choosing groups on
+  the same seasons. Weeks 1-4 were worse in 2025 (+0.0065, SE 0.0062), the part that
+  returning production drives.
+  **Decision:** the Phase 4 model stays the live model. Don't re-tune on 2025 (that would
+  turn the test season into a tuning season). The 2026 games are the next honest test,
+  e.g. by recording the stack alongside the live predictions.
 
 ## Decisions
 
