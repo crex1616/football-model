@@ -170,3 +170,20 @@ def add_win_probs(games: pd.DataFrame, spread_col: str, prefix: str) -> pd.DataF
     games[f"{prefix}_prob_normal_by_week"] = normal_prob(games, spread_col, by_week=True)
     games[f"{prefix}_prob_logistic"] = logistic_prob(games, spread_col)
     return games
+
+
+def current_sigma(pred: pd.DataFrame, spread_col: str, season: int) -> float:
+    """Sigma for live predictions in `season`: residual SD on every earlier season.
+
+    The same estimate walk_forward_sigma gives a season it hasn't seen.
+
+    Args:
+        pred: Walk-forward predictions (run_spread output) with margin and spread_col.
+        spread_col: Column with the predicted home margin.
+        season: The season being predicted.
+
+    Returns:
+        Sigma in points.
+    """
+    earlier = [s for s in pred["season"].unique() if s < season]
+    return residual_sd(pred, spread_col, earlier)

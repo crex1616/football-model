@@ -105,3 +105,29 @@ def test_phase5_loaders_use_their_cache_files(monkeypatch):
         "venues.parquet",
         "teams.parquet",
     ]
+
+
+def test_cached_refetches_stale_week_until_final(tmp_path):
+    path = tmp_path / "games_2026_regular_week_09.parquet"
+    responses = [
+        pd.DataFrame({"id": [1], "completed": [False]}),
+        pd.DataFrame({"id": [1], "completed": [True]}),
+    ]
+    calls = []
+
+    def fake_fetch():
+        calls.append(1)
+        return responses[len(calls) - 1]
+
+    data._cached(path, fake_fetch, is_stale=data.week_has_unfinished_games)
+    data._cached(path, fake_fetch, is_stale=data.week_has_unfinished_games)
+    final = data._cached(path, fake_fetch, is_stale=data.week_has_unfinished_games)
+
+    assert len(calls) == 2
+    assert bool(final["completed"].all())
+
+
+def test_week_lines_not_final():
+    assert data.week_lines_not_final(pd.DataFrame())
+    assert data.week_lines_not_final(pd.DataFrame({"homeScore": [21.0, None]}))
+    assert not data.week_lines_not_final(pd.DataFrame({"homeScore": [21.0, 14.0]}))

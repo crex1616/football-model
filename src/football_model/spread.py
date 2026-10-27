@@ -332,3 +332,49 @@ def final_ratings(games: pd.DataFrame, params: SpreadParams, season: int) -> pd.
     table = table.sort_values("rating", ascending=False).reset_index(drop=True)
     table.attrs["home_field"] = float(fit[HOME_FIELD])
     return table
+
+
+def predict_upcoming(
+    games: pd.DataFrame, upcoming: pd.DataFrame, params: SpreadParams
+) -> pd.DataFrame:
+    """Predict spreads for games not yet played, from a fit on every game before them.
+
+    This is the live version of one step of run_spread: the season's ratings are fit on
+    all of its games that kicked off before the first upcoming game, shrunk toward the
+    preseason prior from last season. Games on or after that kickoff are dropped first,
+    so nothing from the future can enter the fit.
+
+    Args:
+        games: Completed games (clean_games output), last season and earlier plus the
+            current season so far.
+        upcoming: Games to predict (clean_schedule output), all in the current season.
+        params: Model settings.
+
+    Returns:
+        New DataFrame: `upcoming` plus home_rating, away_rating, hfa (0 at neutral
+        sites), spread_pred (expected home margin, + = home favored), and games_in_fit.
+    """
+    first_kickoff = upcoming["start_date"].min()
+    season = int(upcoming["season"].iloc[0])
+    history = games[games["start_date"] < first_kickoff]
+
+    _, fits = _walk_forward(history, params)
+    if season in fits:
+        fit = fits[season]
+        games_in_fit = int((history["season"] == season).sum())
+    else:
+        # No games played yet this season: the preseason prior is the prediction.
+        teams = sorted(set(upcoming["home_team"]) | set(upcoming["away_team"]))
+        fit = season_prior(fits.get(season - 1), teams, params.revert)
+        games_in_fit = 0
+
+    # A team with no rating (e.g. new to FBS, no games yet) gets the FCS rating, as in
+    # season_prior.
+    fallback = float(fit.get(FCS_TEAM, 0.0))
+    out = upcoming.copy()
+    out["home_rating"] = out["home_team"].map(fit).fillna(fallback).to_numpy()
+    out["away_rating"] = out["away_team"].map(fit).fillna(fallback).to_numpy()
+    out["hfa"] = np.where(out["neutral_site"], 0.0, fit[HOME_FIELD])
+    out["spread_pred"] = out["hfa"] + out["home_rating"] - out["away_rating"]
+    out["games_in_fit"] = games_in_fit
+    return out

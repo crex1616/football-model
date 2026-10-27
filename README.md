@@ -85,6 +85,18 @@ Get a free API key at [collegefootballdata.com/key](https://collegefootballdata.
 
 All data comes from [CollegeFootballData.com](https://collegefootballdata.com) through the official [cfbd-python](https://github.com/CFBD/cfbd-python) client. Raw data is not committed to this repository; anyone can rebuild it with their own key.
 
+## Weekly run
+
+Before the first kickoff of each week (midweek games count):
+
+```bash
+python scripts/predict_week.py --week N --dry-run   # check the games and numbers
+python scripts/predict_week.py --week N             # save predictions/YYYY/week_NN.csv
+```
+
+The script refuses to overwrite a saved week or to include games that have kicked off.
+Commit the CSV right away.
+
 ## Status
 
 | Phase | Status |
@@ -93,6 +105,6 @@ All data comes from [CollegeFootballData.com](https://collegefootballdata.com) t
 | 2. Elo baseline | Done |
 | 3. Point-spread regression | Done |
 | 4. Win probabilities | Done |
-| 5. Features and ML models | Not started |
+| 5. Features and ML models | In progress (5a data done) |
 | 6. Season simulation | Not started |
 | 7. Rankings | Not started |

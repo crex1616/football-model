@@ -49,6 +49,29 @@ GAME_COLUMNS = {
 FCS_TEAM = "FCS"
 
 
+def _select_columns(raw_games: pd.DataFrame) -> pd.DataFrame:
+    """Keep and rename the pre-game-safe columns, parse kickoffs to UTC, pool FCS teams.
+
+    The steps shared by clean_games (finished games) and clean_schedule (unplayed ones).
+    """
+    games = raw_games[list(GAME_COLUMNS)].rename(columns=GAME_COLUMNS)
+    games["start_date"] = pd.to_datetime(games["start_date"], utc=True)
+
+    # One shared "FCS" team: individual FCS teams play only 1-2 FBS games a season,
+    # far too few to estimate a rating each. Anything not labeled "fbs" (FCS, D-II,
+    # missing) goes here. The original classification columns are kept for reference.
+    for side in ["home", "away"]:
+        is_fbs = games[f"{side}_classification"] == "fbs"
+        games[f"{side}_team"] = games[f"{side}_team"].where(is_fbs, FCS_TEAM)
+    return games
+
+
+def _is_completed(raw_games: pd.DataFrame) -> pd.Series:
+    """True for games marked completed with both scores present."""
+    completed = raw_games["completed"].fillna(False).astype(bool)
+    return completed & raw_games["homePoints"].notna() & raw_games["awayPoints"].notna()
+
+
 def clean_games(raw_games: pd.DataFrame) -> pd.DataFrame:
     """Turn raw CFBD games into the clean, home-perspective games table.
 
@@ -63,31 +86,71 @@ def clean_games(raw_games: pd.DataFrame) -> pd.DataFrame:
     Returns:
         New DataFrame, one row per completed game, sorted by start_date.
     """
-    completed = raw_games["completed"] & raw_games["homePoints"].notna()
-    completed &= raw_games["awayPoints"].notna()
+    completed = _is_completed(raw_games)
     n_dropped = int((~completed).sum())
     if n_dropped:
         print(f"Dropped {n_dropped} game(s) that were not completed or have no score.")
 
-    games = raw_games.loc[completed, list(GAME_COLUMNS)].rename(columns=GAME_COLUMNS)
-
-    games["start_date"] = pd.to_datetime(games["start_date"], utc=True)
+    games = _select_columns(raw_games.loc[completed])
     games["home_points"] = games["home_points"].astype(int)
     games["away_points"] = games["away_points"].astype(int)
-
-    # One shared "FCS" team: individual FCS teams play only 1-2 FBS games a season,
-    # far too few to estimate a rating each. Anything not labeled "fbs" (FCS, D-II,
-    # missing) goes here. The original classification columns are kept for reference.
-    for side in ["home", "away"]:
-        is_fbs = games[f"{side}_classification"] == "fbs"
-        games[f"{side}_team"] = games[f"{side}_team"].where(is_fbs, FCS_TEAM)
-
     games["margin"] = games["home_points"] - games["away_points"]
     games["home_win"] = (games["margin"] > 0).astype(int)
     games["covid_season"] = games["season"] == config.COVID_SEASON
 
     # Sort by kickoff, not week: every postseason game is labeled week 1.
     return games.sort_values(["start_date", "game_id"]).reset_index(drop=True)
+
+
+def clean_schedule(raw_games: pd.DataFrame) -> pd.DataFrame:
+    """Unplayed games in the same shape as clean_games, without scores or targets.
+
+    These are the games to predict. Points, margin, and home_win are dropped because
+    they don't exist yet.
+
+    Args:
+        raw_games: Games as returned by data.load_games_week (CFBD camelCase columns).
+
+    Returns:
+        New DataFrame, one row per game not yet completed, sorted by start_date.
+    """
+    games = _select_columns(raw_games.loc[~_is_completed(raw_games)])
+    games = games.drop(columns=["home_points", "away_points"])
+    games["covid_season"] = games["season"] == config.COVID_SEASON
+    return games.sort_values(["start_date", "game_id"]).reset_index(drop=True)
+
+
+def build_current_season(season: int, week: int) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Games played so far this regular season, and the games of the week to predict.
+
+    Loads regular-season weeks 1 through `week` with data.load_games_week (cached; only
+    weeks still in progress are re-fetched) and the week's lines with
+    data.load_lines_week. Nothing is written to games.parquet, which holds completed
+    seasons only. Postseason weeks are not handled yet.
+
+    Args:
+        season: The season in progress.
+        week: The regular-season week to predict.
+
+    Returns:
+        (completed, upcoming): completed is clean_games output for every finished game
+        this season; upcoming is clean_schedule output for the unplayed games of `week`,
+        plus market_spread and n_providers (the line as of now; benchmark only).
+    """
+    raw = pd.concat(
+        [data.load_games_week(season, w) for w in range(1, week + 1)], ignore_index=True
+    )
+    upcoming = clean_schedule(raw[raw["week"] == week])
+
+    lines = data.load_lines_week(season, week)
+    if lines.empty:
+        upcoming["market_spread"] = np.nan
+        upcoming["n_providers"] = 0
+    else:
+        upcoming = add_market_lines(upcoming, consensus_lines(lines))
+
+    completed = clean_games(raw[_is_completed(raw)])
+    return completed, upcoming
 
 
 def consensus_lines(raw_lines: pd.DataFrame) -> pd.DataFrame:

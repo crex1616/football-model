@@ -41,20 +41,30 @@ def get_api_client() -> cfbd.ApiClient:
     return cfbd.ApiClient(configuration)
 
 
-def _cached(path: Path, fetch_fn: Callable[[], pd.DataFrame]) -> pd.DataFrame:
+def _cached(
+    path: Path,
+    fetch_fn: Callable[[], pd.DataFrame],
+    is_stale: Callable[[pd.DataFrame], bool] | None = None,
+) -> pd.DataFrame:
     """Return the DataFrame cached at `path`, fetching and saving it if missing.
 
     Args:
         path: Parquet file to read from or write to.
         fetch_fn: Zero-argument function that calls the API and returns a DataFrame.
-            It runs only when `path` does not exist yet.
+            It runs only when `path` does not exist yet (or the cached copy is stale).
+        is_stale: Optional check on the cached DataFrame. If it returns True, the file
+            is fetched again and overwritten. Used for in-season weeks, which change
+            until every game is final. None means a cached file is never re-fetched.
 
     Returns:
         The cached (or freshly fetched) DataFrame.
     """
     if path.exists():
-        print(f"Loaded from cache: {path.name}")
-        return pd.read_parquet(path)
+        cached = pd.read_parquet(path)
+        if is_stale is None or not is_stale(cached):
+            print(f"Loaded from cache: {path.name}")
+            return cached
+        print(f"Cached file is stale (games not final), re-fetching: {path.name}")
 
     df = fetch_fn()
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -288,3 +298,77 @@ def load_teams() -> pd.DataFrame:
         return flatten_records(_to_records(teams))
 
     return _cached(config.RAW_DIR / "teams.parquet", fetch)
+
+
+def week_has_unfinished_games(games: pd.DataFrame) -> bool:
+    """True if a cached week of games is empty or has any game not yet completed.
+
+    A finished week never changes, so it is fetched once. A week still in progress (or
+    not yet played) is re-fetched each time it is loaded, so new scores come in.
+    """
+    return games.empty or not bool(games["completed"].all())
+
+
+def week_lines_not_final(lines: pd.DataFrame) -> bool:
+    """True if cached week lines are empty or any game in them has no final score.
+
+    Lines move until kickoff, so a week's lines are re-fetched until every game is over.
+    """
+    return lines.empty or bool(lines["homeScore"].isna().any())
+
+
+def load_games_week(season: int, week: int, season_type: str = "regular") -> pd.DataFrame:
+    """Load one week of games involving an FBS team, for the season in progress.
+
+    One API call the first time. The file data/raw/games_{season}_{season_type}_week_{WW}
+    .parquet is re-fetched only while some game in it is not yet completed, so each
+    finished week costs exactly one call (or two, if it was first loaded as a schedule).
+
+    Args:
+        season: Season year, e.g. 2026.
+        week: Week number. Every postseason game is week 1.
+        season_type: "regular" or "postseason".
+
+    Returns:
+        Raw games DataFrame (same CFBD columns as load_games), finished and unplayed games.
+    """
+
+    def fetch() -> pd.DataFrame:
+        with get_api_client() as client:
+            games = cfbd.GamesApi(client).get_games(
+                year=season,
+                week=week,
+                season_type=cfbd.SeasonType(season_type),
+                classification=cfbd.DivisionClassification.FBS,
+            )
+        return pd.DataFrame(_to_records(games))
+
+    path = config.RAW_DIR / f"games_{season}_{season_type}_week_{week:02d}.parquet"
+    return _cached(path, fetch, is_stale=week_has_unfinished_games)
+
+
+def load_lines_week(season: int, week: int, season_type: str = "regular") -> pd.DataFrame:
+    """Load one week of betting lines (all providers), for the season in progress.
+
+    Re-fetched until every game in the week has a final score, so lines saved alongside
+    a prediction are the latest available at that time. A benchmark only, never a
+    model input.
+
+    Args:
+        season: Season year, e.g. 2026.
+        week: Week number.
+        season_type: "regular" or "postseason".
+
+    Returns:
+        One row per game x provider (see flatten_lines), CFBD sign convention.
+    """
+
+    def fetch() -> pd.DataFrame:
+        with get_api_client() as client:
+            lines = cfbd.BettingApi(client).get_lines(
+                year=season, week=week, season_type=cfbd.SeasonType(season_type)
+            )
+        return flatten_lines(_to_records(lines))
+
+    path = config.RAW_DIR / f"lines_{season}_{season_type}_week_{week:02d}.parquet"
+    return _cached(path, fetch, is_stale=week_lines_not_final)

@@ -53,6 +53,7 @@ Planned modules in `src/football_model/` (create each when its phase starts):
 | `elo.py` | Elo ratings | 2 |
 | `spread.py` | Ridge regression on point margin | 3 |
 | `win_prob.py` | Spread to probability conversion | 4 |
+| `predict.py` | Live weekly predictions saved to `predictions/` | 4 |
 | `features.py` | Pre-game feature construction | 5 |
 | `evaluate.py` | Walk-forward backtests and metrics | 2+ |
 | `simulate.py` | Monte Carlo season simulation | 6 |

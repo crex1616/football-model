@@ -206,3 +206,54 @@ def test_huber_no_leakage_from_later_games():
 
     early = base["week"] <= 2
     assert after.loc[early, "spread_pred"].tolist() == base.loc[early, "spread_pred"].tolist()
+
+
+def make_upcoming(rows: list[tuple]) -> pd.DataFrame:
+    """Unplayed 2024 games from (week, home, away, neutral) tuples."""
+    games = make_games([(2024, week, home, away, 0, neutral) for week, home, away, neutral in rows])
+    return games.drop(columns="margin")
+
+
+def test_predict_upcoming_sign_and_neutral_site():
+    # A beat B and C by a lot; B and C are even, so A should be favored.
+    played = make_games(
+        [
+            (2024, 1, "A", "B", 21, False),
+            (2024, 1, "C", "A", -21, False),
+            (2024, 2, "B", "C", 0, True),
+        ]
+    )
+    upcoming = make_upcoming([(3, "A", "B", False), (3, "B", "A", True)])
+
+    pred = spread.predict_upcoming(played, upcoming, spread.SpreadParams())
+
+    assert pred.loc[0, "spread_pred"] > 0
+    assert pred.loc[1, "hfa"] == 0.0
+    assert pred.loc[1, "spread_pred"] < 0
+    assert (pred["games_in_fit"] == 3).all()
+
+
+def test_predict_upcoming_ignores_games_after_kickoff():
+    played = THREE_TEAMS[THREE_TEAMS["week"] <= 2]
+    upcoming = make_upcoming([(3, "A", "B", False)])
+    later = make_games([(2024, 4, "B", "A", 50, False)])
+    later["game_id"] = 99
+
+    clean_pred = spread.predict_upcoming(played, upcoming, spread.SpreadParams())
+    leaky_pred = spread.predict_upcoming(
+        pd.concat([played, later], ignore_index=True), upcoming, spread.SpreadParams()
+    )
+
+    assert clean_pred.loc[0, "spread_pred"] == leaky_pred.loc[0, "spread_pred"]
+
+
+def test_predict_upcoming_unknown_team_gets_fcs_rating():
+    played = make_games([(2024, 1, "A", "FCS", 30, False)])
+    upcoming = make_upcoming([(2, "A", "Newcomer", False)])
+
+    pred = spread.predict_upcoming(played, upcoming, spread.SpreadParams())
+
+    fit = spread.fit_ratings(
+        played, spread.season_prior(None, ["A", "FCS"], 0.1), spread.SpreadParams()
+    )
+    assert pred.loc[0, "away_rating"] == fit["FCS"]

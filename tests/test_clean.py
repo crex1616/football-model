@@ -173,3 +173,21 @@ def test_add_market_lines_keeps_games_without_a_line():
     assert merged.loc[1, "market_spread"] == 14.0
     assert pd.isna(merged.loc[2, "market_spread"])
     assert merged.loc[2, "n_providers"] == 0
+
+
+def test_clean_schedule_keeps_only_unplayed_games_without_scores():
+    schedule = clean.clean_schedule(make_raw_games())
+
+    assert list(schedule["game_id"]) == [4]
+    for column in ["home_points", "away_points", "margin", "home_win"]:
+        assert column not in schedule.columns
+    assert str(schedule["start_date"].dt.tz) == "UTC"
+
+
+def test_clean_schedule_pools_fcs_teams():
+    raw = make_raw_games()
+    raw.loc[raw["id"] == 4, "awayClassification"] = "fcs"
+
+    schedule = clean.clean_schedule(raw)
+
+    assert schedule.loc[0, "away_team"] == "FCS"

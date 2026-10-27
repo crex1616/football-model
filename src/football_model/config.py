@@ -24,6 +24,9 @@ FIRST_SEASON = 2014
 CURRENT_SEASON = 2026
 COVID_SEASON = 2020
 
+# Time zone for kickoff times printed to the terminal. Stored data stays in UTC.
+DISPLAY_TIMEZONE = "America/Denver"
+
 # Seed for anything random (simulations, boosting, sampling) so results are reproducible.
 RANDOM_SEED = 42
 
