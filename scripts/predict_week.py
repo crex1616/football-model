@@ -69,6 +69,9 @@ def main() -> None:
     xlsx = predict.excel_path(season, args.week)
     predict.write_excel(preds, xlsx)
     print(f"Saved readable copy (one tab per conference) to {xlsx}")
+    print(f"\n  {path.name} is the permanent record: commit it, and never edit or delete it.")
+    print(f"  {xlsx.name} is the copy to read; rebuild it any time with")
+    print(f"  python scripts/export_predictions.py --week {args.week}")
 
 
 if __name__ == "__main__":

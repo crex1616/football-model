@@ -319,3 +319,120 @@ def write_excel(predictions: pd.DataFrame, path: Path) -> None:
                     number_format = "0%" if column in EXCEL_PERCENT_COLUMNS else "0.0"
                     for cell in sheet[letter][1:]:
                         cell.number_format = number_format
+
+
+def results_path(season: int, week: int) -> Path:
+    """predictions/{season}/week_{WW}_results.csv: a week's predictions joined to results."""
+    return config.PREDICTIONS_DIR / str(season) / f"week_{week:02d}_results.csv"
+
+
+def ats_result(model_spread: float, closing_spread: float, margin: float) -> str:
+    """Did the side the model liked against the closing line cover? "win", "loss", or "push".
+
+    All three numbers are expected or actual home margin. The model likes the home team
+    against the line when model_spread > closing_spread; home covers when margin >
+    closing_spread. Equal model and closing lines (no side) or a margin exactly on the
+    line is a push. For reading only: against-the-spread records are noisy and are not
+    how the model is judged (that is log loss and MAE).
+    """
+    if model_spread == closing_spread or margin == closing_spread:
+        return "push"
+    likes_home = model_spread > closing_spread
+    home_covered = margin > closing_spread
+    return "win" if likes_home == home_covered else "loss"
+
+
+def score_predictions(
+    predictions: pd.DataFrame,
+    results: pd.DataFrame,
+    closing: pd.DataFrame,
+    market_sigma: float,
+) -> pd.DataFrame:
+    """Join saved predictions to final results and the closing line, one row per finished game.
+
+    Args:
+        predictions: A saved prediction file (load_saved_predictions).
+        results: Finished games (clean.clean_games output) with margin and home_win.
+            Games not in here (not yet played) are left out.
+        closing: Closing consensus lines (clean.consensus_lines output).
+        market_sigma: Residual SD of the market line on earlier seasons
+            (evaluate.market_residual_sd), to turn a line into a probability.
+
+    Returns:
+        New DataFrame: the predictions plus home_points, away_points, margin, home_win,
+        closing_spread, market_prob_home (from the closing line), market_saved_prob_home
+        (from the line saved with the prediction), errors as margin minus spread for each
+        model and the closing line, picked_winner (the ridge favorite won), and ats_result.
+    """
+    finals = results[["game_id", "home_points", "away_points", "margin", "home_win"]]
+    lines = closing[["game_id", "market_spread"]].rename(
+        columns={"market_spread": "closing_spread"}
+    )
+    scored = predictions.merge(finals, on="game_id", how="inner", validate="one_to_one")
+    scored = scored.merge(lines, on="game_id", how="left", validate="one_to_one")
+
+    scored["market_prob_home"] = evaluate.market_win_prob(scored["closing_spread"], market_sigma)
+    scored["market_saved_prob_home"] = evaluate.market_win_prob(
+        scored["market_spread"], market_sigma
+    )
+    for name in ["ridge", "huber"]:
+        scored[f"{name}_error"] = scored["margin"] - scored[f"{name}_spread"]
+    scored["closing_error"] = scored["margin"] - scored["closing_spread"]
+    scored["picked_winner"] = (scored["ridge_home_win_prob"] > 0.5) == (scored["home_win"] == 1)
+    scored["ats_result"] = [
+        ats_result(m, c, y) if pd.notna(c) else "no line"
+        for m, c, y in zip(scored["ridge_spread"], scored["closing_spread"], scored["margin"])
+    ]
+    return scored.sort_values(["start_date", "game_id"]).reset_index(drop=True)
+
+
+def summarize_scores(scored: pd.DataFrame) -> pd.DataFrame:
+    """Model vs. market on the same games: MAE, log loss, Brier, and winners picked.
+
+    Only games with both a closing line and a saved line are scored, so every row covers
+    the same games.
+
+    Args:
+        scored: score_predictions output (one week, or several stacked).
+
+    Returns:
+        One row per model: ridge, huber, market (closing), market (when saved).
+    """
+    games = scored[scored["closing_spread"].notna() & scored["market_spread"].notna()]
+    models = {
+        "ridge": ("ridge_spread", "ridge_home_win_prob"),
+        "huber": ("huber_spread", "huber_home_win_prob"),
+        "market (closing)": ("closing_spread", "market_prob_home"),
+        "market (when saved)": ("market_spread", "market_saved_prob_home"),
+    }
+    rows = {}
+    for name, (spread_col, prob_col) in models.items():
+        picked = (games[prob_col] > 0.5) == (games["home_win"] == 1)
+        rows[name] = {
+            "games": len(games),
+            "mae": evaluate.mae(games["margin"], games[spread_col]),
+            "log_loss": evaluate.log_loss(games["home_win"], games[prob_col]),
+            "brier": evaluate.brier_score(games["home_win"], games[prob_col]),
+            "winners_pct": float(picked.mean()),
+        }
+    return pd.DataFrame.from_dict(rows, orient="index")
+
+
+def biggest_misses(scored: pd.DataFrame, n: int = 5) -> pd.DataFrame:
+    """The n games the ridge model missed by the most points, in readable form."""
+    order = scored["ridge_error"].abs().sort_values(ascending=False).index[:n]
+    rows = []
+    for game in scored.loc[order].itertuples():
+        rows.append(
+            {
+                "Matchup": f"{game.away_team} @ {game.home_team}",
+                "Predicted line": format_line(game.ridge_spread, game.home_team, game.away_team),
+                "Closing line": format_line(
+                    game.closing_spread, game.home_team, game.away_team, exact=True
+                ),
+                "Final": f"{game.away_team} {game.away_points}, "
+                f"{game.home_team} {game.home_points}",
+                "Missed by": round(abs(game.ridge_error), 1),
+            }
+        )
+    return pd.DataFrame(rows)

@@ -1,3 +1,4 @@
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -140,3 +141,83 @@ def test_write_excel_one_sheet_per_tab(tmp_path):
     sheets = pd.read_excel(path, sheet_name=None)
     assert list(sheets) == ["All games", "ACC", "Big Ten", "Mid-American"]
     assert len(sheets["ACC"]) == 1
+
+
+def test_ats_result_hand_examples():
+    # Closing line: home -7 (our sign +7). Model says home by 10, so it likes home.
+    assert predict.ats_result(10.0, 7.0, 14) == "win"  # home won by 14: covered
+    assert predict.ats_result(10.0, 7.0, 3) == "loss"  # home won by 3: didn't cover
+    assert predict.ats_result(10.0, 7.0, 7) == "push"  # landed on the line
+    # Model says home by 2, so it likes the away team +7; away lost by 3: covered.
+    assert predict.ats_result(2.0, 7.0, 3) == "win"
+
+
+def make_scoring_inputs() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Three predicted games; game 3 is not played yet."""
+    preds = pd.DataFrame(
+        {
+            "game_id": [1, 2, 3],
+            "start_date": pd.to_datetime(
+                ["2026-10-31 16:00", "2026-10-31 23:30", "2026-11-01 02:00"], utc=True
+            ),
+            "home_team": ["Duke", "USC", "UNLV"],
+            "away_team": ["Boston College", "Ohio State", "Northern Illinois"],
+            "ridge_spread": [10.0, -12.0, 25.0],
+            "ridge_home_win_prob": [0.8, 0.2, 0.9],
+            "huber_spread": [9.0, -11.0, 24.0],
+            "huber_home_win_prob": [0.75, 0.25, 0.9],
+            "market_spread": [7.0, -6.5, 23.5],
+        }
+    )
+    results = pd.DataFrame(
+        {
+            "game_id": [1, 2],
+            "home_points": [24, 31],
+            "away_points": [21, 24],
+            "margin": [3, 7],
+            "home_win": [1, 1],
+        }
+    )
+    closing = pd.DataFrame({"game_id": [1, 2, 3], "market_spread": [7.5, -6.0, 24.0]})
+    return preds, results, closing
+
+
+def test_score_predictions_errors_picks_and_unplayed_games():
+    preds, results, closing = make_scoring_inputs()
+
+    scored = predict.score_predictions(preds, results, closing, market_sigma=15.0)
+
+    assert list(scored["game_id"]) == [1, 2]  # game 3 not played: left out
+    assert list(scored["ridge_error"]) == [3 - 10.0, 7 - (-12.0)]  # margin - spread
+    assert list(scored["closing_error"]) == [3 - 7.5, 7 - (-6.0)]
+    # Away favorite Ohio State lost, so that pick was wrong.
+    assert list(scored["picked_winner"]) == [True, False]
+    # Game 1: model likes Duke (10 > 7.5), Duke won by 3: loss. Game 2: model likes
+    # Ohio State (-12 < -6), USC won: loss.
+    assert list(scored["ats_result"]) == ["loss", "loss"]
+
+
+def test_summarize_scores_matches_hand_calculation():
+    preds, results, closing = make_scoring_inputs()
+    scored = predict.score_predictions(preds, results, closing, market_sigma=15.0)
+
+    summary = predict.summarize_scores(scored)
+
+    assert (summary["games"] == 2).all()
+    assert summary.loc["ridge", "mae"] == pytest.approx((7.0 + 19.0) / 2)
+    expected_log_loss = -(np.log(0.8) + np.log(0.2)) / 2
+    assert summary.loc["ridge", "log_loss"] == pytest.approx(expected_log_loss)
+    assert summary.loc["ridge", "winners_pct"] == 0.5
+    assert summary.loc["market (closing)", "mae"] == pytest.approx((4.5 + 13.0) / 2)
+
+
+def test_biggest_misses_readable():
+    preds, results, closing = make_scoring_inputs()
+    scored = predict.score_predictions(preds, results, closing, market_sigma=15.0)
+
+    misses = predict.biggest_misses(scored, n=1)
+
+    assert misses.loc[0, "Matchup"] == "Ohio State @ USC"
+    assert misses.loc[0, "Predicted line"] == "Ohio State -12.0"
+    assert misses.loc[0, "Final"] == "Ohio State 24, USC 31"
+    assert misses.loc[0, "Missed by"] == 19.0

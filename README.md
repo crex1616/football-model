@@ -97,6 +97,20 @@ python scripts/predict_week.py --week N             # save predictions/YYYY/week
 The script refuses to overwrite a saved week or to include games that have kicked off.
 Commit the CSV right away.
 
+Each week gets two files in `predictions/YYYY/`:
+
+| File | What it is |
+| --- | --- |
+| `week_NN.csv` | **The permanent record.** Committed before kickoff; never edit or delete it. Scoring reads this file. |
+| `week_NN.xlsx` | The readable copy: one tab per conference, lines first, raw numbers last. Not committed; rebuild with `python scripts/export_predictions.py --week N`. |
+| `week_NN_results.csv` | Written by `python scripts/score_week.py --week N` once every game is final: predictions joined to scores and the closing line. Commit it. |
+
+After a week ends, score it:
+
+```bash
+python scripts/score_week.py --week N   # model vs. market, season to date, biggest misses
+```
+
 ## Status
 
 | Phase | Status |
