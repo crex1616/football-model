@@ -101,7 +101,7 @@ Each week gets two files in `predictions/YYYY/`:
 
 | File | What it is |
 | --- | --- |
-| `week_NN.csv` | **The permanent record.** Committed before kickoff; never edit or delete it. Scoring reads this file. |
+| `week_NN.csv` | **The permanent record.** Committed before kickoff; never edit or delete it. Scoring reads this file. From week 10 of 2026 it also holds the Phase 5b stack as a *shadow* model (`stack_spread`, `stack_home_win_prob`): recorded for an honest test, not the live pick. |
 | `week_NN.xlsx` | The readable copy: one tab per conference, lines first, raw numbers last. Not committed; rebuild with `python scripts/export_predictions.py --week N`. |
 | `week_NN_results.csv` | Written by `python scripts/score_week.py --week N` once every game is final: predictions joined to scores and the closing line. Commit it. |
 

@@ -8,6 +8,9 @@ Models in each file, kept side by side:
 
 - ridge: the Phase 3 ridge spread with Phi(spread / sigma) (the primary model).
 - huber: the Huber-loss spread with Phi(spread / sigma).
+- stack (shadow, from week 10 of 2026): the Phase 5b stacked model on pre-game
+  features. Recorded next to the live model so the 2026 games can test it honestly;
+  it is not the prediction we stand behind (it lost to ridge on the 2025 test season).
 
 market_spread is the consensus line when the file was written. It is saved so the
 week can later be scored "model vs. market"; it is never a model input.
@@ -17,7 +20,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from football_model import config, evaluate, spread, win_prob
+from football_model import config, elo, evaluate, features, models, spread, win_prob
 
 MODELS = {"ridge": spread.SpreadParams(), "huber": spread.HUBER_PARAMS}
 
@@ -40,6 +43,8 @@ OUTPUT_COLUMNS = [
     "ridge_home_win_prob",
     "huber_spread",
     "huber_home_win_prob",
+    "stack_spread",
+    "stack_home_win_prob",
     "sigma",
     "games_in_fit",
     "market_spread",
@@ -56,8 +61,53 @@ def excel_path(season: int, week: int) -> Path:
     return prediction_path(season, week).with_suffix(".xlsx")
 
 
+def stack_shadow(
+    history: pd.DataFrame,
+    upcoming: pd.DataFrame,
+    stats: pd.DataFrame,
+    returning: pd.DataFrame,
+    teams: pd.DataFrame,
+    venues: pd.DataFrame,
+    training: pd.DataFrame,
+) -> pd.DataFrame:
+    """The shadow stack's predictions for the upcoming games.
+
+    Builds the same pre-game features the stack was trained on (ratings, efficiency,
+    preseason, situational) for games not yet played, then predicts with
+    models.predict_stack, trained on seasons before this one.
+
+    Args:
+        history: Completed games, earlier seasons plus this season so far.
+        upcoming: Games to predict.
+        stats: Advanced game stats for the completed games (all seasons).
+        returning: Returning production for this season.
+        teams: data.load_teams output.
+        venues: data.load_venues output.
+        training: Feature table for past seasons (features.load_features()).
+
+    Returns:
+        New DataFrame with game_id, stack_spread, stack_home_win_prob.
+    """
+    season = int(upcoming["season"].iloc[0])
+    feats = features.upcoming_features(history, upcoming, stats, returning, teams, venues)
+    feats["home"] = (~upcoming["neutral_site"].astype(bool)).astype(float)
+    feats["ridge_spread"] = spread.predict_upcoming(history, upcoming, MODELS["ridge"])[
+        "spread_pred"
+    ]
+    feats["huber_spread"] = spread.predict_upcoming(history, upcoming, MODELS["huber"])[
+        "spread_pred"
+    ]
+    feats["elo_diff"] = elo.upcoming_elo_diff(history, upcoming, elo.EloParams())
+    out = models.predict_stack(training, feats, season)
+    out.insert(0, "game_id", upcoming["game_id"].to_numpy())
+    return out
+
+
 def build_week_predictions(
-    history: pd.DataFrame, upcoming: pd.DataFrame, created_at: pd.Timestamp
+    history: pd.DataFrame,
+    upcoming: pd.DataFrame,
+    created_at: pd.Timestamp,
+    stack: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """Spreads and win probabilities from every model in MODELS for the upcoming games.
 
@@ -70,6 +120,7 @@ def build_week_predictions(
         history: Completed games, earlier seasons plus this season so far.
         upcoming: Games to predict (clean_schedule output with market_spread).
         created_at: Timestamp written to every row (UTC).
+        stack: stack_shadow output, or None to leave the stack columns empty.
 
     Returns:
         New DataFrame with OUTPUT_COLUMNS, sorted by kickoff.
@@ -87,6 +138,11 @@ def build_week_predictions(
             for col in ["home_rating", "away_rating", "hfa", "games_in_fit"]:
                 out[col] = pred[col].to_numpy()
             out["sigma"] = sigma
+
+    for col in ["stack_spread", "stack_home_win_prob"]:
+        out[col] = (
+            float("nan") if stack is None else out["game_id"].map(stack.set_index("game_id")[col])
+        )
 
     out["created_at"] = created_at
     out = out.sort_values(["start_date", "game_id"]).reset_index(drop=True)
@@ -162,6 +218,10 @@ def readable_table(
         New DataFrame of strings, one row per game.
     """
     preds = predictions.sort_values(["start_date", "game_id"])
+    # Files saved before the shadow stack existed (2026 week 9) have no stack columns.
+    for col in ["stack_spread", "stack_home_win_prob"]:
+        if col not in preds.columns:
+            preds = preds.assign(**{col: float("nan")})
     rows = []
     for game in preds.itertuples():
         p_home = game.ridge_home_win_prob
@@ -207,13 +267,19 @@ def add_conferences(predictions: pd.DataFrame, raw_games: pd.DataFrame) -> pd.Da
 
 
 # Excel columns: the easy-to-read columns first, then the model's raw numbers.
-EXCEL_PERCENT_COLUMNS = ["Win %", "Home win % (ridge)", "Home win % (Huber)"]
+EXCEL_PERCENT_COLUMNS = [
+    "Win %",
+    "Home win % (ridge)",
+    "Home win % (Huber)",
+    "Home win % (stack, shadow)",
+]
 EXCEL_NUMBER_COLUMNS = [
     "Home rating",
     "Away rating",
     "Home field (pts)",
     "Ridge spread (home pts)",
     "Huber spread (home pts)",
+    "Stack spread (home pts)",
     "Market spread (home pts)",
     "Sigma",
 ]
@@ -235,6 +301,10 @@ def excel_table(predictions: pd.DataFrame, timezone: str = config.DISPLAY_TIMEZO
         New DataFrame with display column names.
     """
     preds = predictions.sort_values(["start_date", "game_id"])
+    # Files saved before the shadow stack existed (2026 week 9) have no stack columns.
+    for col in ["stack_spread", "stack_home_win_prob"]:
+        if col not in preds.columns:
+            preds = preds.assign(**{col: float("nan")})
     rows = []
     for game in preds.itertuples():
         p_home = game.ridge_home_win_prob
@@ -255,11 +325,16 @@ def excel_table(predictions: pd.DataFrame, timezone: str = config.DISPLAY_TIMEZO
                 "Huber line": format_line(game.huber_spread, game.home_team, game.away_team),
                 "Home win % (ridge)": p_home,
                 "Home win % (Huber)": game.huber_home_win_prob,
+                "Stack line (shadow)": format_line(
+                    game.stack_spread, game.home_team, game.away_team
+                ),
+                "Home win % (stack, shadow)": game.stack_home_win_prob,
                 "Home rating": game.home_rating,
                 "Away rating": game.away_rating,
                 "Home field (pts)": game.hfa,
                 "Ridge spread (home pts)": game.ridge_spread,
                 "Huber spread (home pts)": game.huber_spread,
+                "Stack spread (home pts)": game.stack_spread,
                 "Market spread (home pts)": game.market_spread,
                 "Sigma": game.sigma,
                 "Games in fit": game.games_in_fit,
@@ -375,7 +450,9 @@ def score_predictions(
     scored["market_saved_prob_home"] = evaluate.market_win_prob(
         scored["market_spread"], market_sigma
     )
-    for name in ["ridge", "huber"]:
+    for name in ["ridge", "huber", "stack"]:
+        if f"{name}_spread" not in scored.columns:
+            continue
         scored[f"{name}_error"] = scored["margin"] - scored[f"{name}_spread"]
     scored["closing_error"] = scored["margin"] - scored["closing_spread"]
     scored["picked_winner"] = (scored["ridge_home_win_prob"] > 0.5) == (scored["home_win"] == 1)
@@ -399,14 +476,38 @@ def summarize_scores(scored: pd.DataFrame) -> pd.DataFrame:
         One row per model: ridge, huber, market (closing), market (when saved).
     """
     games = scored[scored["closing_spread"].notna() & scored["market_spread"].notna()]
-    models = {
+    compared = {
         "ridge": ("ridge_spread", "ridge_home_win_prob"),
         "huber": ("huber_spread", "huber_home_win_prob"),
         "market (closing)": ("closing_spread", "market_prob_home"),
         "market (when saved)": ("market_spread", "market_saved_prob_home"),
     }
+    return _score_table(games, compared)
+
+
+def shadow_comparison(scored: pd.DataFrame) -> pd.DataFrame:
+    """Ridge vs. the shadow stack vs. the closing line, on games where the stack ran.
+
+    The stack has been recorded since 2026 week 10, so this covers fewer games than
+    summarize_scores. Empty if no scored game has a stack prediction.
+    """
+    if "stack_spread" not in scored.columns:
+        return pd.DataFrame()
+    games = scored[scored["stack_spread"].notna() & scored["closing_spread"].notna()]
+    if games.empty:
+        return pd.DataFrame()
+    compared = {
+        "ridge (live)": ("ridge_spread", "ridge_home_win_prob"),
+        "stack (shadow)": ("stack_spread", "stack_home_win_prob"),
+        "market (closing)": ("closing_spread", "market_prob_home"),
+    }
+    return _score_table(games, compared)
+
+
+def _score_table(games: pd.DataFrame, compared: dict[str, tuple[str, str]]) -> pd.DataFrame:
+    """MAE, log loss, Brier, winners picked for each (spread, probability) column pair."""
     rows = {}
-    for name, (spread_col, prob_col) in models.items():
+    for name, (spread_col, prob_col) in compared.items():
         picked = (games[prob_col] > 0.5) == (games["home_win"] == 1)
         rows[name] = {
             "games": len(games),

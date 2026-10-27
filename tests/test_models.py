@@ -67,3 +67,27 @@ def test_coefficient_table_has_standard_errors():
 
     assert list(table.columns) == ["coef", "std_err", "t", "p_value"]
     assert table.loc["x", "coef"] == pytest.approx(3 * feats["x"].std(), rel=0.1)
+
+
+def test_stack_features_are_all_feature_groups():
+    from football_model import features
+
+    all_groups = [c for cols in features.FEATURE_GROUPS.values() for c in cols]
+    assert models.STACK_FEATURES == all_groups
+
+
+def test_predict_stack_trains_on_earlier_seasons_only():
+    feats = make_features([2015, 2016])
+    feats = feats.rename(columns={"x": "ridge_spread"})
+    for col in models.STACK_FEATURES:
+        if col not in feats.columns:
+            feats[col] = 0.0
+    upcoming = feats[feats["season"] == 2016].head(3)
+
+    first = models.predict_stack(feats, upcoming, 2016)
+    changed = feats.copy()
+    changed.loc[changed["season"] == 2016, "margin"] *= -10  # this season's own results
+    second = models.predict_stack(changed, upcoming, 2016)
+
+    pd.testing.assert_frame_equal(first, second)
+    assert list(first.columns) == ["stack_spread", "stack_home_win_prob"]

@@ -238,3 +238,33 @@ def final_ratings(rated_games: pd.DataFrame) -> pd.DataFrame:
         .sort_values("rating", ascending=False)
     )
     return latest.reset_index(drop=True)
+
+
+def upcoming_elo_diff(games: pd.DataFrame, upcoming: pd.DataFrame, params: EloParams) -> pd.Series:
+    """Pre-game Elo difference (home minus away, plus home field) for unplayed games.
+
+    Runs Elo through every completed game before the first upcoming kickoff and uses
+    each team's latest rating. If the upcoming games are in a new season, ratings are
+    reverted toward the mean first, as run_elo does at a season change. Teams never
+    rated get the FCS rating (as new programs do in run_elo).
+
+    Args:
+        games: Completed games (clean_games output).
+        upcoming: Games to predict, one season (clean_schedule output).
+        params: Elo settings.
+
+    Returns:
+        Series aligned with `upcoming`: elo_diff, the same quantity run_elo records.
+    """
+    history = games[games["start_date"] < upcoming["start_date"].min()]
+    rated = run_elo(history, params)
+    latest = final_ratings(rated)
+    ratings = dict(zip(latest["team"], latest["rating"]))
+    if int(upcoming["season"].iloc[0]) > int(history["season"].max()):
+        ratings = _revert_to_mean(ratings, params.revert)
+
+    fallback = ratings.get(FCS_TEAM, params.initial)
+    r_home = upcoming["home_team"].map(ratings).fillna(fallback)
+    r_away = upcoming["away_team"].map(ratings).fillna(fallback)
+    home_edge = (~upcoming["neutral_site"].astype(bool)).astype(float) * params.home_field
+    return (r_home - r_away + home_edge).astype(float)

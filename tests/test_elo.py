@@ -132,3 +132,35 @@ def test_run_elo_does_not_mutate_input():
     elo.run_elo(games, elo.EloParams())
 
     pd.testing.assert_frame_equal(games, before)
+
+
+def test_upcoming_elo_diff_uses_latest_ratings():
+    played = pd.DataFrame(
+        {
+            "game_id": [1],
+            "season": [2024],
+            "start_date": [pd.Timestamp("2024-09-01", tz="UTC")],
+            "home_team": ["A"],
+            "away_team": ["B"],
+            "neutral_site": [False],
+            "margin": [10],
+        }
+    )
+    upcoming = pd.DataFrame(
+        {
+            "season": [2024, 2024],
+            "start_date": [pd.Timestamp("2024-09-08", tz="UTC")] * 2,
+            "home_team": ["B", "A"],
+            "away_team": ["A", "Newcomer"],
+            "neutral_site": [True, False],
+        }
+    )
+    params = elo.EloParams()
+
+    diff = elo.upcoming_elo_diff(played, upcoming, params)
+
+    rated = elo.run_elo(played, params)
+    a_post, b_post = rated.loc[0, "home_elo_post"], rated.loc[0, "away_elo_post"]
+    assert diff.iloc[0] == pytest.approx(b_post - a_post)  # neutral: no home field
+    # No FCS rating exists here, so a never-rated team starts at the initial rating.
+    assert diff.iloc[1] == pytest.approx(a_post - params.initial + params.home_field)

@@ -372,3 +372,39 @@ def load_lines_week(season: int, week: int, season_type: str = "regular") -> pd.
 
     path = config.RAW_DIR / f"lines_{season}_{season_type}_week_{week:02d}.parquet"
     return _cached(path, fetch, is_stale=week_lines_not_final)
+
+
+def load_advanced_game_stats_week(
+    season: int, week: int, expected_games: int, season_type: str = "regular"
+) -> pd.DataFrame:
+    """Load one finished week of advanced game stats, for the season in progress.
+
+    Call this only for weeks whose games are all completed. CFBD posts stats a little
+    after games end, so a file covering fewer than 95% of `expected_games` is treated
+    as incomplete and fetched again next time (historical coverage is 97.7-100%).
+
+    Args:
+        season: Season year, e.g. 2026.
+        week: Week number.
+        expected_games: Completed games involving an FBS team that week.
+        season_type: "regular" or "postseason".
+
+    Returns:
+        Raw advanced game stats (same columns as load_advanced_game_stats).
+    """
+
+    def fetch() -> pd.DataFrame:
+        with get_api_client() as client:
+            stats = cfbd.StatsApi(client).get_advanced_game_stats(
+                year=season,
+                week=week,
+                season_type=cfbd.SeasonType(season_type),
+                exclude_garbage_time=True,
+            )
+        return flatten_records(_to_records(stats))
+
+    def incomplete(stats: pd.DataFrame) -> bool:
+        return stats.empty or stats["gameId"].nunique() < 0.95 * expected_games
+
+    path = config.RAW_DIR / f"advanced_game_stats_{season}_{season_type}_week_{week:02d}.parquet"
+    return _cached(path, fetch, is_stale=incomplete)

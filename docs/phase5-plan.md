@@ -116,8 +116,14 @@ trained on earlier seasons only; each group is kept only if log loss improves.
   the same seasons. Weeks 1-4 were worse in 2025 (+0.0065, SE 0.0062), the part that
   returning production drives.
   **Decision:** the Phase 4 model stays the live model. Don't re-tune on 2025 (that would
-  turn the test season into a tuning season). The 2026 games are the next honest test,
-  e.g. by recording the stack alongside the live predictions.
+  turn the test season into a tuning season). The 2026 games are the next honest test.
+- **Shadow mode (from 2026 week 10):** `predict_week.py` records the stack's spread and
+  win probability next to the live ridge model in every prediction file;
+  `score_week.py` prints a "shadow check" (ridge vs. stack vs. closing line on the same
+  games) for the week and the season so far. Live features are built by the same
+  functions as the backtest; with 2025 week 8 treated as unplayed, they match the
+  backtest features exactly. 2026 advanced stats are fetched one finished week at a
+  time (1 API call per week).
 
 ## Decisions
 

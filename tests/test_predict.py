@@ -221,3 +221,26 @@ def test_biggest_misses_readable():
     assert misses.loc[0, "Predicted line"] == "Ohio State -12.0"
     assert misses.loc[0, "Final"] == "Ohio State 24, USC 31"
     assert misses.loc[0, "Missed by"] == 19.0
+
+
+def test_excel_table_handles_files_saved_before_the_shadow_stack():
+    preds = make_full_predictions()  # no stack columns, like the week 9 file
+    table = predict.excel_table(preds)
+
+    assert (table["Stack line (shadow)"] == "-").all()
+    # The readable columns come first, unchanged.
+    assert list(table.columns[:4]) == ["Away", "Home", "Predicted line", "Market line"]
+
+
+def test_shadow_comparison_only_on_games_with_a_stack_prediction():
+    preds, results, closing = make_scoring_inputs()
+    preds["stack_spread"] = [8.0, float("nan"), 20.0]
+    preds["stack_home_win_prob"] = [0.7, float("nan"), 0.9]
+    scored = predict.score_predictions(preds, results, closing, market_sigma=15.0)
+
+    shadow = predict.shadow_comparison(scored)
+
+    assert list(shadow.index) == ["ridge (live)", "stack (shadow)", "market (closing)"]
+    assert (shadow["games"] == 1).all()  # game 2 has no stack prediction; game 3 unplayed
+    assert shadow.loc["stack (shadow)", "mae"] == pytest.approx(abs(3 - 8.0))
+    assert predict.shadow_comparison(predict.score_predictions(*make_scoring_inputs(), 15.0)).empty

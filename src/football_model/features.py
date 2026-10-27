@@ -55,6 +55,14 @@ class EfficiencyParams:
     revert: float = 0.3
 
 
+# Tuned in Phase 5b (scripts/evaluate_features.py, MSE of pre-game prediction on the
+# tuning seasons). Used for live predictions.
+TUNED_EFFICIENCY = {
+    "epa": EfficiencyParams(alpha=10.0, revert=0.1),
+    "sr": EfficiencyParams(alpha=3.0, revert=0.3),
+}
+
+
 # --- Efficiency ratings -------------------------------------------------------------
 
 
@@ -453,22 +461,102 @@ def build_features(
         out = pd.concat([out, ratings], axis=1)
         out[f"{metric}_edge"] = efficiency_edge(ratings, metric)
 
-    # Group 3: preseason strength, fading as games are played.
+    # Groups 3 and 4: preseason strength and situational.
     returning = pd.concat([data.load_returning_production(s) for s in seasons], ignore_index=True)
-    out = pd.concat([out, returning_ppa(out, returning), games_played_before(out)], axis=1)
+    return add_preseason_and_situational(out, returning, data.load_teams(), data.load_venues())
+
+
+def add_preseason_and_situational(
+    games: pd.DataFrame, returning: pd.DataFrame, teams: pd.DataFrame, venues: pd.DataFrame
+) -> pd.DataFrame:
+    """Add the preseason and situational feature groups (and their pieces) to games.
+
+    Shared by build_features (history) and upcoming_features (games not yet played).
+    Every piece looks only at a team's earlier games or at pre-season data.
+
+    Args:
+        games: Games (completed and/or unplayed) with season, start_date, home_team,
+            away_team, home_id, away_id, venue_id; sorted by start_date.
+        returning: data.load_returning_production output for the seasons in games.
+        teams: data.load_teams output.
+        venues: data.load_venues output.
+
+    Returns:
+        New DataFrame: games plus home_/away_ ret_ppa, played, rest, travel, and the
+        features ret_ppa_diff, ret_ppa_diff_faded, rest_diff, travel_diff.
+    """
+    out = games.reset_index(drop=True)
+    pieces = [returning_ppa(out, returning), games_played_before(out), rest_days(out)]
+    out = pd.concat([out, *pieces, travel_miles(out, teams, venues)], axis=1)
+
+    # Preseason: returning production, fading as games are played.
     out["ret_ppa_diff"] = out["home_ret_ppa"] - out["away_ret_ppa"]
     avg_played = (out["home_played"] + out["away_played"]) / 2
     out["ret_ppa_diff_faded"] = out["ret_ppa_diff"] / (1 + avg_played)
 
-    # Group 4: situational.
-    out = pd.concat([out, rest_days(out)], axis=1)
-    # A pooled FCS team's games against other FCS teams aren't in the table, so its
-    # rest looks like the full cap every time; no rest edge is computed for those games.
+    # Situational. A pooled FCS team's games against other FCS teams aren't in the
+    # table, so its rest looks like the full cap every time; no rest edge for those.
     has_fcs = (out["home_team"] == FCS_TEAM) | (out["away_team"] == FCS_TEAM)
     out["rest_diff"] = (out["home_rest"] - out["away_rest"]).where(~has_fcs, 0.0)
-    travel = travel_miles(out, data.load_teams(), data.load_venues())
-    out = pd.concat([out, travel], axis=1)
     out["travel_diff"] = ((out["away_travel"] - out["home_travel"]) / 100).fillna(0.0)
+    return out
+
+
+def upcoming_features(
+    games: pd.DataFrame,
+    upcoming: pd.DataFrame,
+    stats: pd.DataFrame,
+    returning: pd.DataFrame,
+    teams: pd.DataFrame,
+    venues: pd.DataFrame,
+    efficiency_params: dict[str, EfficiencyParams] | None = None,
+) -> pd.DataFrame:
+    """Efficiency, preseason, and situational features for games not yet played.
+
+    The upcoming games are appended to the completed ones and run through the same
+    functions as build_features. Every function only looks backward in time, so the
+    upcoming games get exactly what they would have had in the backtest: efficiency
+    ratings fit on games before their kickoff, games played and rest from earlier games.
+    Completed games on or after the first upcoming kickoff are dropped first.
+
+    Args:
+        games: Completed games (clean_games output), all seasons.
+        upcoming: Games to predict (clean_schedule output).
+        stats: Advanced game stats for the completed games.
+        returning: Returning production for the upcoming season.
+        teams: data.load_teams output.
+        venues: data.load_venues output.
+        efficiency_params: EfficiencyParams per metric; TUNED_EFFICIENCY if None.
+
+    Returns:
+        New DataFrame aligned with `upcoming` (same index) with the efficiency,
+        preseason, and situational feature columns.
+    """
+    efficiency_params = efficiency_params or TUNED_EFFICIENCY
+    history = games[games["start_date"] < upcoming["start_date"].min()]
+    combined = pd.concat(
+        [history.assign(_upcoming=False), upcoming.assign(_upcoming=True)], ignore_index=True
+    )
+    combined = combined.sort_values(["start_date", "game_id"]).reset_index(drop=True)
+    # Per-game stats come from `stats` only; drop any copies already on the games.
+    stat_cols = [f"{side}_{m}" for side in ["home", "away"] for m in METRICS]
+    combined = combined.drop(columns=stat_cols, errors="ignore")
+    combined = combined.merge(game_efficiency(stats, combined), on="game_id", how="left")
+    for metric, params in efficiency_params.items():
+        combined[f"{metric}_edge"] = efficiency_edge(
+            run_efficiency(combined, metric, params), metric
+        )
+
+    season = combined["season"] == int(upcoming["season"].iloc[0])
+    this_season = add_preseason_and_situational(combined[season], returning, teams, venues)
+    rows = this_season[this_season["_upcoming"]].set_index("game_id")
+
+    cols = [
+        c for group in ["efficiency", "preseason", "situational"] for c in FEATURE_GROUPS[group]
+    ]
+    out = pd.DataFrame(index=upcoming.index)
+    for col in cols:
+        out[col] = upcoming["game_id"].map(rows[col]).to_numpy()
     return out
 
 

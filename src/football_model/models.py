@@ -114,3 +114,41 @@ def coefficient_table(train: pd.DataFrame, cols: list[str]) -> pd.DataFrame:
             "p_value": result.pvalues,
         }
     )
+
+
+# The Phase 5b stack, as selected by scripts/evaluate_features.py: all four feature
+# groups, ridge penalty 100. It runs in "shadow" in the weekly predictions (recorded
+# next to the live model, not used as it) because it beat the baseline on the tuning
+# seasons but not on the 2025 test season (docs/phase5-plan.md).
+STACK_ALPHA = 100.0
+STACK_FEATURES = [
+    "home",
+    "ridge_spread",
+    "huber_spread",
+    "elo_diff",
+    "epa_edge",
+    "sr_edge",
+    "ret_ppa_diff",
+    "ret_ppa_diff_faded",
+    "rest_diff",
+    "travel_diff",
+]
+
+
+def predict_stack(training: pd.DataFrame, upcoming: pd.DataFrame, season: int) -> pd.DataFrame:
+    """Spread and win probability from the stack for games in `season`.
+
+    Args:
+        training: Feature table with past seasons (features.load_features()).
+        upcoming: Rows with every column in STACK_FEATURES.
+        season: The season being predicted; the model trains on seasons before it.
+
+    Returns:
+        New DataFrame aligned with `upcoming`: stack_spread, stack_home_win_prob.
+    """
+    model, sigma = fit_stacked(training_rows(training, season), STACK_FEATURES, STACK_ALPHA)
+    spread_pred = model.predict(upcoming[STACK_FEATURES])
+    return pd.DataFrame(
+        {"stack_spread": spread_pred, "stack_home_win_prob": norm.cdf(spread_pred / sigma)},
+        index=upcoming.index,
+    )

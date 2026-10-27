@@ -44,6 +44,11 @@ def main() -> None:
     record = f"{ats.get('win', 0)}-{ats.get('loss', 0)}-{ats.get('push', 0)}"
     print(f"Ridge against the closing line: {record} (for reading only; noisy)")
 
+    shadow = predict.shadow_comparison(scored)
+    if not shadow.empty:
+        print("\nShadow check: live ridge vs. the Phase 5b stack, same games:")
+        print(shadow.round(3).to_string())
+
     print("\nBiggest misses (ridge):")
     print(predict.biggest_misses(scored).to_string(index=False))
 
@@ -62,6 +67,10 @@ def main() -> None:
         weeks = ", ".join(f.name[5:7] for f in files)
         print(f"\nSeason to date (weeks {weeks}):")
         print(predict.summarize_scores(season_scored).round(3).to_string())
+        shadow = predict.shadow_comparison(season_scored)
+        if not shadow.empty:
+            print("Shadow check, season to date (weeks with a stack prediction):")
+            print(shadow.round(3).to_string())
 
 
 if __name__ == "__main__":

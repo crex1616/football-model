@@ -14,7 +14,35 @@ import argparse
 
 import pandas as pd
 
-from football_model import clean, config, predict
+from football_model import clean, config, data, features, predict
+
+
+def shadow_stack(
+    history: pd.DataFrame, upcoming: pd.DataFrame, completed: pd.DataFrame, season: int, week: int
+) -> pd.DataFrame | None:
+    """Load the shadow stack's inputs and predict; on any problem, warn and return None.
+
+    The shadow model must never stop the live predictions from being saved on time.
+    API calls: one per finished week of this season's advanced stats not yet cached.
+    """
+    try:
+        stats = [data.load_advanced_game_stats(s) for s in range(config.FIRST_SEASON, season)]
+        for w in range(1, week):
+            expected = int((completed["week"] == w).sum())
+            if expected:
+                stats.append(data.load_advanced_game_stats_week(season, w, expected))
+        return predict.stack_shadow(
+            history,
+            upcoming,
+            pd.concat(stats, ignore_index=True),
+            data.load_returning_production(season),
+            data.load_teams(),
+            data.load_venues(),
+            features.load_features(),
+        )
+    except Exception as err:  # noqa: BLE001 - report and carry on without the shadow model
+        print(f"WARNING: shadow stack skipped ({type(err).__name__}: {err})")
+        return None
 
 
 def main() -> None:
@@ -45,7 +73,8 @@ def main() -> None:
     print(f"Now (UTC):      {now}")
     print(f"Games with a market line: {int(upcoming['market_spread'].notna().sum())}\n")
 
-    preds = predict.build_week_predictions(history, upcoming, created_at=now)
+    stack = shadow_stack(history, upcoming, completed, season, args.week)
+    preds = predict.build_week_predictions(history, upcoming, created_at=now, stack=stack)
     if args.allow_partial:
         preds = predict.drop_started(preds, now)
 
@@ -59,6 +88,13 @@ def main() -> None:
         diff = (preds.loc[has_line, "ridge_spread"] - preds.loc[has_line, "market_spread"]).abs()
         corr = preds.loc[has_line, ["ridge_spread", "market_spread"]].corr().iloc[0, 1]
         print(f"Ridge vs. market: mean |diff| {diff.mean():.2f} points, correlation {corr:.3f}")
+    if preds["stack_spread"].notna().any():
+        gap = (preds["stack_spread"] - preds["ridge_spread"]).abs()
+        corr = preds[["stack_spread", "ridge_spread"]].corr().iloc[0, 1]
+        print(
+            f"Shadow stack vs. ridge: mean |diff| {gap.mean():.2f} points, correlation {corr:.3f}"
+            " (recorded in the CSV and Excel, not the live pick)"
+        )
 
     path = predict.prediction_path(season, args.week)
     if args.dry_run:

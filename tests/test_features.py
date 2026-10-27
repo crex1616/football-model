@@ -213,3 +213,79 @@ def test_returning_ppa_clips_and_fills_missing_with_season_mean():
     assert out.loc[0, "home_ret_ppa"] == 0.8
     assert out.loc[0, "away_ret_ppa"] == 0.0  # -3.0 clipped to 0
     assert out.loc[1, "away_ret_ppa"] == pytest.approx((0.8 + 0.0 + 0.5) / 3)  # FCS: mean
+
+
+# --- Features for games not yet played ----------------------------------------------
+
+
+def upcoming_inputs(games: pd.DataFrame) -> dict:
+    """Hand-built stats, returning production, team and venue locations for THREE_TEAMS."""
+    stats = pd.concat(
+        [
+            games[["game_id", "home_team", "home_epa"]].set_axis(["gameId", "team", "v"], axis=1),
+            games[["game_id", "away_team", "away_epa"]].set_axis(["gameId", "team", "v"], axis=1),
+        ]
+    ).dropna()
+    stats = stats.assign(**{"offense.ppa": stats["v"], "offense.successRate": stats["v"]})
+    return {
+        "stats": stats.drop(columns="v"),
+        "returning": pd.DataFrame(
+            {"season": 2024, "team": ["A", "B", "C"], "percentPPA": [0.8, 0.5, 0.3]}
+        ),
+        "teams": pd.DataFrame(
+            {
+                "id": [1, 2, 3],
+                "location.latitude": [40.0, 35.0, 30.0],
+                "location.longitude": [-83.0, -90.0, -97.0],
+            }
+        ),
+        "venues": pd.DataFrame(
+            {"id": [1, 2, 3], "latitude": [40.0, 35.0, 30.0], "longitude": [-83.0, -90.0, -97.0]}
+        ),
+    }
+
+
+def with_venues(games: pd.DataFrame) -> pd.DataFrame:
+    """Each game is at the home team's stadium (venue id = team id)."""
+    return games.assign(venue_id=games["home_id"])
+
+
+def test_upcoming_features_match_backtest_features():
+    games = with_venues(THREE_TEAMS)
+    inputs = upcoming_inputs(games)
+    week3 = games["week"] == 3
+    upcoming = games[week3].drop(columns=["home_epa", "away_epa", "home_sr", "away_sr"])
+
+    live = features.upcoming_features(
+        games[~week3],
+        upcoming,
+        inputs["stats"],
+        inputs["returning"],
+        inputs["teams"],
+        inputs["venues"],
+        {m: features.EfficiencyParams(1.0, 0.3) for m in features.METRICS},
+    )
+
+    # Backtest path: the same functions run on the full table.
+    params = features.EfficiencyParams(1.0, 0.3)
+    edge = features.efficiency_edge(features.run_efficiency(games, "epa", params), "epa")
+    full = features.add_preseason_and_situational(
+        games, inputs["returning"], inputs["teams"], inputs["venues"]
+    )
+    np.testing.assert_allclose(live["epa_edge"], edge[week3])
+    for col in ["ret_ppa_diff", "ret_ppa_diff_faded", "rest_diff", "travel_diff"]:
+        np.testing.assert_allclose(live[col], full.loc[week3.to_numpy(), col])
+
+
+def test_upcoming_features_ignore_games_after_kickoff():
+    games = with_venues(THREE_TEAMS)
+    inputs = upcoming_inputs(games)
+    week2 = games["week"] == 2
+    upcoming = games[week2].drop(columns=["home_epa", "away_epa", "home_sr", "away_sr"])
+    params = {m: features.EfficiencyParams(1.0, 0.3) for m in features.METRICS}
+    args = (inputs["stats"], inputs["returning"], inputs["teams"], inputs["venues"], params)
+
+    only_before = features.upcoming_features(games[games["week"] == 1], upcoming, *args)
+    with_later = features.upcoming_features(games[~week2], upcoming, *args)  # includes week 3
+
+    pd.testing.assert_frame_equal(only_before, with_later)
