@@ -10,6 +10,7 @@ dependencies:
   - scikit-learn
   - scipy
   - matplotlib
+  - openpyxl           # Excel output of weekly predictions
   - python-dotenv
   - jupyter
   - ipykernel

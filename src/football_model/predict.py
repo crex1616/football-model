@@ -30,6 +30,8 @@ OUTPUT_COLUMNS = [
     "start_date",
     "home_team",
     "away_team",
+    "home_conference",
+    "away_conference",
     "neutral_site",
     "home_rating",
     "away_rating",
@@ -47,6 +49,11 @@ OUTPUT_COLUMNS = [
 def prediction_path(season: int, week: int) -> Path:
     """predictions/{season}/week_{WW}.csv."""
     return config.PREDICTIONS_DIR / str(season) / f"week_{week:02d}.csv"
+
+
+def excel_path(season: int, week: int) -> Path:
+    """predictions/{season}/week_{WW}.xlsx (a readable copy of the CSV)."""
+    return prediction_path(season, week).with_suffix(".xlsx")
 
 
 def build_week_predictions(
@@ -172,3 +179,143 @@ def readable_table(
             }
         )
     return pd.DataFrame(rows)
+
+
+def load_saved_predictions(path: Path) -> pd.DataFrame:
+    """Read a saved prediction CSV, with kickoff and creation times parsed as UTC."""
+    preds = pd.read_csv(path)
+    for col in ["start_date", "created_at"]:
+        preds[col] = pd.to_datetime(preds[col], utc=True)
+    return preds
+
+
+def add_conferences(predictions: pd.DataFrame, raw_games: pd.DataFrame) -> pd.DataFrame:
+    """Add home_conference and away_conference from raw CFBD games, matched on game_id.
+
+    Only for prediction files saved before conferences were part of OUTPUT_COLUMNS
+    (week 9 of 2026). Conferences are known before kickoff, so this changes nothing
+    about the predictions themselves.
+    """
+    lookup = raw_games[["id", "homeConference", "awayConference"]].rename(
+        columns={
+            "id": "game_id",
+            "homeConference": "home_conference",
+            "awayConference": "away_conference",
+        }
+    )
+    return predictions.merge(lookup, on="game_id", how="left", validate="one_to_one")
+
+
+# Excel columns: the easy-to-read columns first, then the model's raw numbers.
+EXCEL_PERCENT_COLUMNS = ["Win %", "Home win % (ridge)", "Home win % (Huber)"]
+EXCEL_NUMBER_COLUMNS = [
+    "Home rating",
+    "Away rating",
+    "Home field (pts)",
+    "Ridge spread (home pts)",
+    "Huber spread (home pts)",
+    "Market spread (home pts)",
+    "Sigma",
+]
+
+
+def excel_table(predictions: pd.DataFrame, timezone: str = config.DISPLAY_TIMEZONE) -> pd.DataFrame:
+    """One row per game for the Excel file, in kickoff order.
+
+    First the teams, then the predicted and market lines in sportsbook style (favorite
+    minus), the model favorite's win probability, and kickoff in local time. The raw
+    model numbers (ratings, home field, spreads as expected home margin, sigma) are at
+    the end.
+
+    Args:
+        predictions: build_week_predictions output (or a saved CSV), with conferences.
+        timezone: Time zone for kickoff times.
+
+    Returns:
+        New DataFrame with display column names.
+    """
+    preds = predictions.sort_values(["start_date", "game_id"])
+    rows = []
+    for game in preds.itertuples():
+        p_home = game.ridge_home_win_prob
+        rows.append(
+            {
+                "Away": game.away_team,
+                "Home": game.home_team,
+                "Predicted line": format_line(game.ridge_spread, game.home_team, game.away_team),
+                "Market line": format_line(
+                    game.market_spread, game.home_team, game.away_team, exact=True
+                ),
+                "Model favorite": game.home_team if p_home >= 0.5 else game.away_team,
+                "Win %": max(p_home, 1 - p_home),
+                "Kickoff": game.start_date.tz_convert(timezone).strftime("%a %b %d %I:%M %p"),
+                "Site": "Neutral" if game.neutral_site else "Home",
+                "Away conference": game.away_conference,
+                "Home conference": game.home_conference,
+                "Huber line": format_line(game.huber_spread, game.home_team, game.away_team),
+                "Home win % (ridge)": p_home,
+                "Home win % (Huber)": game.huber_home_win_prob,
+                "Home rating": game.home_rating,
+                "Away rating": game.away_rating,
+                "Home field (pts)": game.hfa,
+                "Ridge spread (home pts)": game.ridge_spread,
+                "Huber spread (home pts)": game.huber_spread,
+                "Market spread (home pts)": game.market_spread,
+                "Sigma": game.sigma,
+                "Games in fit": game.games_in_fit,
+                "Game ID": game.game_id,
+                "Created (UTC)": game.created_at.strftime("%Y-%m-%d %H:%M"),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def conference_tabs(table: pd.DataFrame) -> dict[str, pd.DataFrame]:
+    """Split an excel_table into tabs: "All games", then one per FBS conference.
+
+    A game between two conferences appears on both tabs. Pooled FCS opponents don't get
+    a tab of their own; the game shows on the FBS team's tab.
+    """
+    tabs = {"All games": table}
+    conferences = set()
+    for side in ["Away", "Home"]:
+        is_fbs = table[side] != spread.FCS_TEAM
+        conferences |= set(table.loc[is_fbs, f"{side} conference"].dropna())
+    for conference in sorted(conferences):
+        home_in = (table["Home conference"] == conference) & (table["Home"] != spread.FCS_TEAM)
+        away_in = (table["Away conference"] == conference) & (table["Away"] != spread.FCS_TEAM)
+        # Excel sheet names: at most 31 characters, no / \ ? * [ ] :
+        name = "".join(ch for ch in conference if ch not in "/\\?*[]:")[:31]
+        tabs[name] = table[home_in | away_in].reset_index(drop=True)
+    return tabs
+
+
+def write_excel(predictions: pd.DataFrame, path: Path) -> None:
+    """Write the week's predictions as an Excel workbook, one tab per conference.
+
+    The workbook is a readable copy of the CSV, which stays the permanent record, so it
+    can be rebuilt from the CSV at any time (scripts/export_predictions.py).
+
+    Args:
+        predictions: build_week_predictions output (or a saved CSV), with conferences.
+        path: Destination .xlsx file.
+    """
+    from openpyxl.styles import Font
+    from openpyxl.utils import get_column_letter
+
+    tabs = conference_tabs(excel_table(predictions))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with pd.ExcelWriter(path, engine="openpyxl") as writer:
+        for name, table in tabs.items():
+            table.to_excel(writer, sheet_name=name, index=False)
+            sheet = writer.sheets[name]
+            sheet.freeze_panes = "C2"  # keep the header row and team names in view
+            for i, column in enumerate(table.columns, start=1):
+                letter = get_column_letter(i)
+                sheet[f"{letter}1"].font = Font(bold=True)
+                values = [str(v) for v in table[column]] + [column]
+                sheet.column_dimensions[letter].width = min(max(map(len, values)) + 2, 40)
+                if column in EXCEL_PERCENT_COLUMNS or column in EXCEL_NUMBER_COLUMNS:
+                    number_format = "0%" if column in EXCEL_PERCENT_COLUMNS else "0.0"
+                    for cell in sheet[letter][1:]:
+                        cell.number_format = number_format

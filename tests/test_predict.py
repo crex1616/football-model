@@ -87,3 +87,56 @@ def test_readable_table_kickoff_order_and_favorite_win_pct():
     assert list(table["Market line"]) == ["-", "Ohio State -6.5"]
     assert list(table["Win %"]) == ["Duke 78%", "Ohio State 78%"]
     assert table.loc[0, "Kickoff"] == "Sat Oct 31 10:00 AM"
+
+
+def make_full_predictions() -> pd.DataFrame:
+    """Three games: in-conference, cross-conference, and an FCS opponent."""
+    games = pd.DataFrame(
+        {
+            "game_id": [1, 2, 3],
+            "start_date": pd.to_datetime(
+                ["2026-10-31 16:00", "2026-10-31 23:30", "2026-10-31 19:00"], utc=True
+            ),
+            "home_team": ["Duke", "USC", "Akron"],
+            "away_team": ["Boston College", "Ohio State", "FCS"],
+            "home_conference": ["ACC", "Big Ten", "Mid-American"],
+            "away_conference": ["ACC", "Big Ten", "CAA"],
+            "neutral_site": [False, False, False],
+            "ridge_spread": [13.3, -12.9, 20.0],
+            "ridge_home_win_prob": [0.783, 0.223, 0.88],
+            "market_spread": [7.0, -6.5, None],
+        }
+    )
+    for col in ["huber_spread", "home_rating", "away_rating", "hfa", "sigma"]:
+        games[col] = 1.0
+    games["huber_home_win_prob"] = 0.5
+    games["games_in_fit"] = 566
+    games["created_at"] = NOW
+    return games
+
+
+def test_excel_table_puts_teams_then_lines_first():
+    table = predict.excel_table(make_full_predictions())
+
+    assert list(table.columns[:4]) == ["Away", "Home", "Predicted line", "Market line"]
+    assert list(table["Home"]) == ["Duke", "Akron", "USC"]  # kickoff order
+    assert table.loc[2, "Predicted line"] == "Ohio State -12.9"
+    assert table.loc[2, "Win %"] == pytest.approx(0.777)
+
+
+def test_conference_tabs_skip_fcs_and_keep_all_games():
+    tabs = predict.conference_tabs(predict.excel_table(make_full_predictions()))
+
+    assert list(tabs) == ["All games", "ACC", "Big Ten", "Mid-American"]
+    assert len(tabs["All games"]) == 3
+    assert list(tabs["Mid-American"]["Home"]) == ["Akron"]
+
+
+def test_write_excel_one_sheet_per_tab(tmp_path):
+    path = tmp_path / "week_09.xlsx"
+
+    predict.write_excel(make_full_predictions(), path)
+
+    sheets = pd.read_excel(path, sheet_name=None)
+    assert list(sheets) == ["All games", "ACC", "Big Ten", "Mid-American"]
+    assert len(sheets["ACC"]) == 1

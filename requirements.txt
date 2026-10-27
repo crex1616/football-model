@@ -6,6 +6,7 @@ statsmodels
 scikit-learn
 scipy
 matplotlib
+openpyxl
 python-dotenv
 jupyter
 pytest

@@ -2,7 +2,7 @@
 
 Usage:
     python scripts/predict_week.py --week 9 --dry-run    # print, don't save
-    python scripts/predict_week.py --week 9              # save
+    python scripts/predict_week.py --week 9              # save CSV + Excel copy
     python scripts/predict_week.py --week 9 --allow-partial   # some games already started
 
 Reads data/processed/games.parquet (completed seasons) plus the current season's weeks
@@ -66,6 +66,9 @@ def main() -> None:
         return
     predict.save_predictions(preds, path, now)
     print(f"\nSaved {len(preds)} predictions to {path}")
+    xlsx = predict.excel_path(season, args.week)
+    predict.write_excel(preds, xlsx)
+    print(f"Saved readable copy (one tab per conference) to {xlsx}")
 
 
 if __name__ == "__main__":
