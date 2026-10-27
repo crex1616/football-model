@@ -55,6 +55,7 @@ Planned modules in `src/football_model/` (create each when its phase starts):
 | `win_prob.py` | Spread to probability conversion | 4 |
 | `predict.py` | Live weekly predictions saved to `predictions/` | 4 |
 | `features.py` | Pre-game feature construction | 5 |
+| `models.py` | Stacked linear model (later: logistic, LightGBM) | 5 |
 | `evaluate.py` | Walk-forward backtests and metrics | 2+ |
 | `simulate.py` | Monte Carlo season simulation | 6 |
 | `rankings.py` | Power and résumé rankings | 7 |

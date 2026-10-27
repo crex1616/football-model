@@ -132,7 +132,7 @@ def huber_weights(residuals: np.ndarray, c: float) -> np.ndarray:
     return np.where(abs_r <= c, 1.0, c / np.maximum(abs_r, 1e-12))
 
 
-def _ridge_solve(
+def ridge_solve(
     x: np.ndarray, y: np.ndarray, w: np.ndarray, m: np.ndarray, alpha: float
 ) -> np.ndarray:
     """b = m + (X'WX + alpha I)^-1 X'W (y - X m)."""
@@ -184,12 +184,12 @@ def fit_ratings(
     x = X.to_numpy()
     y_arr = y.to_numpy()
     m = prior.to_numpy()
-    b = _ridge_solve(x, y_arr, w, m, params.alpha)
+    b = ridge_solve(x, y_arr, w, m, params.alpha)
 
     if params.huber_c is not None:
         for _ in range(max_iter):
             robust = huber_weights(y_arr - x @ b, params.huber_c)
-            b_new = _ridge_solve(x, y_arr, w * robust, m, params.alpha)
+            b_new = ridge_solve(x, y_arr, w * robust, m, params.alpha)
             converged = np.max(np.abs(b_new - b)) < tol
             b = b_new
             if converged:

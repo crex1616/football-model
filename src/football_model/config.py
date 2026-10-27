@@ -19,6 +19,9 @@ FIGURES_DIR = REPORTS_DIR / "figures"
 # The canonical games table built by clean.py: one row per completed game, home perspective.
 GAMES_TABLE_PATH = PROCESSED_DIR / "games.parquet"
 
+# Pre-game features for every game (features.py), built by scripts/evaluate_features.py.
+FEATURES_TABLE_PATH = PROCESSED_DIR / "features.parquet"
+
 # Seasons used for model history. 2020 is kept but flagged (COVID-disrupted).
 FIRST_SEASON = 2014
 CURRENT_SEASON = 2026
