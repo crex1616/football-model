@@ -91,3 +91,101 @@ def test_predict_stack_trains_on_earlier_seasons_only():
 
     pd.testing.assert_frame_equal(first, second)
     assert list(first.columns) == ["stack_spread", "stack_home_win_prob"]
+
+
+# --- Phase 5c: logistic and LightGBM ---
+
+SMALL_LGBM = models.LgbmParams(
+    num_leaves=4, learning_rate=0.1, n_estimators=50, min_child_samples=10
+)
+
+
+def with_wins(feats: pd.DataFrame) -> pd.DataFrame:
+    """Add home_win (margin > 0) to make_features output."""
+    return feats.assign(home_win=feats["margin"] > 0)
+
+
+def test_logistic_walk_forward_never_trains_on_the_predicted_season():
+    feats = with_wins(make_features([2015, 2016, 2017]))
+    before = models.walk_forward_logistic(feats, ["x"], 1.0, [2017])
+
+    changed = feats.copy()
+    changed.loc[changed["season"] == 2017, "home_win"] = ~changed["home_win"]
+    after = models.walk_forward_logistic(changed, ["x"], 1.0, [2017])
+
+    pd.testing.assert_frame_equal(before, after)
+
+
+def test_logistic_recovers_sign_and_probabilities():
+    feats = with_wins(make_features([2015, 2016, 2017], n_per_season=500))
+
+    pred = models.walk_forward_logistic(feats, ["x"], 1.0, [2017])
+    test = feats[feats["season"] == 2017]
+
+    assert pred["logit_prob"].between(0, 1, inclusive="neither").all()
+    # margin = 3x + N(0, 1): P(win) = Phi(3x), so a big x is a near-certain win.
+    assert (pred["logit_prob"].to_numpy()[test["x"].to_numpy() > 1] > 0.9).all()
+    assert (pred["logit_prob"].to_numpy()[test["x"].to_numpy() < -1] < 0.1).all()
+
+
+def test_logit_coefficient_table_has_standard_errors():
+    feats = with_wins(make_features([2015], n_per_season=300))
+    table = models.logit_coefficient_table(feats, ["x"])
+
+    assert list(table.columns) == ["coef", "std_err", "z", "p_value"]
+    assert table.loc["x", "coef"] > 0
+
+
+def test_lgbm_walk_forward_never_trains_on_the_predicted_season():
+    feats = make_features([2014, 2015, 2016, 2017])
+    before = models.walk_forward_lgbm(feats, ["x"], SMALL_LGBM, [2017])
+
+    changed = feats.copy()
+    changed.loc[changed["season"] == 2017, "margin"] *= -10
+    after = models.walk_forward_lgbm(changed, ["x"], SMALL_LGBM, [2017])
+
+    pd.testing.assert_frame_equal(before, after)
+
+
+def test_holdout_sigma_uses_only_the_last_training_season():
+    feats = make_features([2015, 2016, 2017, 2018])
+    sigma = models.holdout_sigma(feats, 2018, ["x"], SMALL_LGBM)
+
+    # Blow up the forecast season's residuals: sigma must not move.
+    changed = feats.copy()
+    changed.loc[changed["season"] == 2018, "margin"] += 100
+    assert models.holdout_sigma(changed, 2018, ["x"], SMALL_LGBM) == sigma
+
+    # Blow up the held-out season's (2017) residuals: sigma must grow.
+    noisy = feats.copy()
+    noisy.loc[noisy["season"] == 2017, "margin"] += np.random.default_rng(1).normal(
+        scale=20, size=60
+    )
+    assert models.holdout_sigma(noisy, 2018, ["x"], SMALL_LGBM) > 5 * sigma
+
+
+def test_holdout_sigma_falls_back_to_burn_in_with_one_training_season():
+    feats = make_features([config.BURN_IN_SEASON, 2015, 2016])
+
+    sigma = models.holdout_sigma(feats, 2016, ["x"], SMALL_LGBM)
+
+    assert np.isfinite(sigma) and sigma > 0
+
+
+def test_lgbm_is_deterministic():
+    feats = make_features([2014, 2015, 2016, 2017])
+    first = models.walk_forward_lgbm(feats, ["x"], SMALL_LGBM, [2017])
+    second = models.walk_forward_lgbm(feats, ["x"], SMALL_LGBM, [2017])
+
+    pd.testing.assert_frame_equal(first, second)
+    assert ((first["lgbm_prob"] > 0.5) == (first["lgbm_spread"] > 0)).all()
+
+
+def test_lgbm_importance_sums_to_one():
+    feats = make_features([2015], n_per_season=200).assign(noise=0.0)
+    model = models.fit_lgbm(feats, ["x", "noise"], SMALL_LGBM)
+
+    importance = models.lgbm_importance(model, ["x", "noise"])
+
+    assert importance.sum() == pytest.approx(1.0)
+    assert importance.index[0] == "x"

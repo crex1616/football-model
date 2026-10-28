@@ -4,6 +4,7 @@ numpy
 pyarrow
 statsmodels
 scikit-learn
+lightgbm
 scipy
 matplotlib
 openpyxl

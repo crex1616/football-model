@@ -138,6 +138,6 @@ not committed.
 | 2. Elo baseline | Done |
 | 3. Point-spread regression | Done |
 | 4. Win probabilities | Done |
-| 5. Features and ML models | In progress (5a, 5b done; 5c models next) |
+| 5. Features and ML models | Done |
 | 6. Season simulation | Done |
 | 7. Rankings | Done |

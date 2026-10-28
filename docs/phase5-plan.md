@@ -125,6 +125,64 @@ trained on earlier seasons only; each group is kept only if log loss improves.
   backtest features exactly. 2026 advanced stats are fetched one finished week at a
   time (1 API call per week).
 
+## 5c results (Oct 28, 2026)
+
+`scripts/evaluate_phase5.py`, same games and splits as 5b (2016-2024 excl. 2020, 7,079
+games with a closing line). Every model uses the same 10 features (all four 5b groups).
+**Change from the plan above:** feature groups were not re-selected one at a time for
+each new model. 2025 suggested the 5b selection was partly optimism, so each model only
+tunes its own hyperparameters.
+
+| Model | Log loss | Brier | MAE | Log loss, weeks 1-4 | vs. baseline (SE) |
+|---|---|---|---|---|---|
+| Baseline (Phase 4 ridge + normal) | 0.5005 | 0.1676 | 13.318 | 0.4141 | — |
+| Elo | 0.5182 | 0.1744 | — | 0.4373 | +0.0178 (0.0027) |
+| Stack (ridge, alpha 100) | **0.4957** | 0.1655 | **13.177** | **0.4107** | -0.0048 (0.0014) |
+| Penalized logistic (C 0.01) | **0.4957** | **0.1654** | — | 0.4109 | -0.0047 (0.0015) |
+| LightGBM (4 leaves, rate 0.01, 400 trees) | 0.4977 | 0.1662 | 13.234 | 0.4140 | -0.0028 (0.0015) |
+| Market (closing line) | 0.4758 | 0.1586 | 12.302 | 0.3760 | |
+
+- **Logistic ties the stack.** Modeling the win directly (no normal assumption, no
+  sigma) gives the same answer as modeling the margin and converting it, which means
+  Phi(spread / sigma) was not losing anything. Unpenalized logit coefficients tell the
+  same story as the stack's OLS table: returning production (z = 5.6), success rate
+  (5.5), Elo (3.9), and travel (2.6) are clearly nonzero; the ridge and Huber spreads
+  overlap so much that neither is individually significant.
+- **LightGBM is worse than the linear models**, by about 0.002, at every setting tried.
+  The best settings are the simplest: a first grid (4-16 leaves, rate 0.02-0.05,
+  200-500 trees) was best at its simplest corner, and a second, simpler grid (2-8
+  leaves, rate 0.01-0.02, 100-400 trees) plateaued at 0.4977. Stumps (one split per
+  tree, an additive model with no interactions) reach the same 0.4977. More leaves or
+  more trees only add overfitting. With about 6,000 training games and features that
+  are already model outputs, there are no interactions or nonlinearities for the trees
+  to find that the linear model misses. Gain importance: Huber spread 47%, ridge spread
+  29%, success rate 12%, Elo 10%; the rest about 2% combined.
+- **LightGBM's sigma** comes from the last training season held out (fit on the seasons
+  before it): 16.2-17.6 points by season, close to the stack's in-sample 16.6. 2016
+  falls back to fitting on the 2014 burn-in season (17.4, slightly conservative).
+- Calibration: `reports/figures/logit_calibration.png` and `lgbm_calibration.png`, both
+  close to the diagonal.
+- **2025 test season (scored once, Oct 28, 2026): no model beats the baseline.**
+
+  | 2025, 934 games with a line | Log loss | Brier | MAE | Log loss, weeks 1-4 | vs. baseline (SE) |
+  |---|---|---|---|---|---|
+  | Baseline (Phase 4) | **0.4758** | **0.1589** | 12.365 | **0.3694** | — |
+  | Elo | 0.4998 | 0.1677 | — | 0.4145 | +0.0240 (0.0074) |
+  | Stack | 0.4781 | 0.1595 | **12.340** | 0.3760 | +0.0023 (0.0034) |
+  | Penalized logistic | 0.4792 | 0.1598 | — | 0.3762 | +0.0034 (0.0042) |
+  | LightGBM | 0.4791 | 0.1601 | 12.424 | 0.3772 | +0.0033 (0.0034) |
+  | Market (closing line) | 0.4668 | 0.1565 | 11.897 | 0.3465 | |
+
+  All three Phase 5 models are within one SE of each other and of the baseline. The
+  differences are not meaningful.
+
+**Decision:** the Phase 4 model stays the live model and the stack stays the shadow
+model. Logistic and LightGBM are kept in `models.py` for comparison but are not added to
+the weekly predictions: on the tuning seasons neither beats the stack, so they add
+nothing to test. The remaining gap to the market (0.020 log loss on the tuning seasons)
+looks like a gap in information (injuries, quarterback changes, depth charts), not in
+model flexibility.
+
 ## Decisions
 
 - **Scoring starts at 2016.** Stacked models need at least one earlier season to train

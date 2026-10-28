@@ -8,6 +8,7 @@ dependencies:
   - pyarrow
   - statsmodels
   - scikit-learn
+  - lightgbm           # gradient boosting (Phase 5c)
   - scipy
   - matplotlib
   - openpyxl           # Excel output of weekly predictions
