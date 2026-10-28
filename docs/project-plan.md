@@ -128,6 +128,34 @@ Detailed plan: [phase5-plan.md](phase5-plan.md).
 
 Simulate the remaining schedule 10,000 times, applying tiebreakers and championship games. Let ratings move within each simulation. Approximate committee playoff selection with a rule, checking the current format first.
 
+**Built (Oct 28, 2026):** `simulate.py`, `scripts/simulate_season.py`, `scripts/backtest_simulation.py`.
+
+- **Ratings uncertainty:** each simulation draws all team ratings at once from the ridge
+  posterior, N(b, sigma_e^2 (X'X + alpha I)^-1), so a team that is "really" better is better
+  in all its remaining games. Game noise sigma_e is the out-of-sample residual SD with the
+  rating-uncertainty part removed, so uncertainty isn't counted twice.
+- **2026 playoff format (checked Oct 2026):** 12 teams. Automatic bids for the ACC, Big 12,
+  Big Ten, and SEC champions plus the best champion of the American, C-USA, MAC, Mountain
+  West, Pac-12, and Sun Belt; 7 at-large; top 4 get byes. Sources:
+  [National Football Post](https://www.nationalfootballpost.com/2026/10/23/college-football-playoff-format),
+  [Yahoo](https://sports.yahoo.com/articles/college-football-playoff-stay-12-173609664.html),
+  [NCAA.com](https://www.ncaa.com/news/football/article/2026-02-03/how-12-team-college-football-playoff-will-work-teams-schedule-bids).
+- **Simplifications:**
+  - Conference standings: win %, then head-to-head for a two-team tie, then simulated
+    rating (a stand-in for the official multi-step tiebreakers).
+  - Title games: the top two meet at a neutral site; the Sun Belt plays East vs. West.
+    Once a real title game is final, its result is used.
+  - Playoff selection: the committee is approximated by ranking on losses, then simulated
+    rating. Phase 7's résumé ranking can replace this.
+  - Past title games are found from game notes ("Championship") from 2022; before that, a
+    lone December conference game is assumed to be one (the 2021 Pac-12 game is missed).
+- **Backtest** (simulating from week 10, 2016-2024 excl. 2020, 2,000 simulations each):
+  - Regular-season wins MAE 0.756, vs. 0.895 for "current win rate x games left."
+  - P(bowl eligible): log loss 0.2276, Brier 0.0736 (base rate 0.620); calibration plot
+    in `reports/figures/simulation_bowl_calibration.png`.
+  - P(conference champion), 2024 only (the first season with known divisions): log loss
+    0.1906, Brier 0.0545; actual champions had an average probability of 0.249.
+
 ### Phase 7: Rankings
 
 - **Power ranking:** sort by rating.

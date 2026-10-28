@@ -262,6 +262,7 @@ def calibration_plot(
     path: Path,
     title: str = "Calibration",
     n_bins: int = 10,
+    outcome: str = "home win",
 ) -> pd.DataFrame:
     """Plot predicted probability vs. actual win rate in bins and save it.
 
@@ -274,6 +275,7 @@ def calibration_plot(
         path: Where to save the PNG.
         title: Plot title.
         n_bins: Number of equal-width probability bins.
+        outcome: What is being predicted, for the axis labels.
 
     Returns:
         The binned table (mean predicted, actual rate, games per bin).
@@ -290,8 +292,8 @@ def calibration_plot(
     ax.plot([0, 1], [0, 1], color="gray", linewidth=0.8, label="Perfect calibration")
     ax.scatter(table["predicted"], table["actual"], s=table["games"] / table["games"].max() * 200)
     ax.plot(table["predicted"], table["actual"], marker="", linewidth=1)
-    ax.set_xlabel("Predicted home win probability")
-    ax.set_ylabel("Actual home win rate")
+    ax.set_xlabel(f"Predicted {outcome} probability")
+    ax.set_ylabel(f"Actual {outcome} rate")
     ax.set_title(title)
     ax.legend(loc="upper left")
     path.parent.mkdir(parents=True, exist_ok=True)

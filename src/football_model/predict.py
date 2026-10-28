@@ -375,23 +375,43 @@ def write_excel(predictions: pd.DataFrame, path: Path) -> None:
         predictions: build_week_predictions output (or a saved CSV), with conferences.
         path: Destination .xlsx file.
     """
+    tabs = conference_tabs(excel_table(predictions))
+    write_tabs(tabs, path, EXCEL_PERCENT_COLUMNS, EXCEL_NUMBER_COLUMNS, freeze="C2")
+
+
+def write_tabs(
+    tabs: dict[str, pd.DataFrame],
+    path: Path,
+    percent_columns: list[str],
+    number_columns: list[str],
+    freeze: str,
+) -> None:
+    """Write tables to one workbook, one sheet each: bold headers, fitted widths, formats.
+
+    Args:
+        tabs: Sheet name -> table.
+        path: Destination .xlsx file.
+        percent_columns: Columns shown as whole percents (values are 0-1).
+        number_columns: Columns shown with one decimal.
+        freeze: Top-left cell of the scrolling area (e.g. "C2" keeps row 1 and
+            columns A-B in view).
+    """
     from openpyxl.styles import Font
     from openpyxl.utils import get_column_letter
 
-    tabs = conference_tabs(excel_table(predictions))
     path.parent.mkdir(parents=True, exist_ok=True)
     with pd.ExcelWriter(path, engine="openpyxl") as writer:
         for name, table in tabs.items():
             table.to_excel(writer, sheet_name=name, index=False)
             sheet = writer.sheets[name]
-            sheet.freeze_panes = "C2"  # keep the header row and team names in view
+            sheet.freeze_panes = freeze
             for i, column in enumerate(table.columns, start=1):
                 letter = get_column_letter(i)
                 sheet[f"{letter}1"].font = Font(bold=True)
                 values = [str(v) for v in table[column]] + [column]
                 sheet.column_dimensions[letter].width = min(max(map(len, values)) + 2, 40)
-                if column in EXCEL_PERCENT_COLUMNS or column in EXCEL_NUMBER_COLUMNS:
-                    number_format = "0%" if column in EXCEL_PERCENT_COLUMNS else "0.0"
+                if column in percent_columns or column in number_columns:
+                    number_format = "0%" if column in percent_columns else "0.0"
                     for cell in sheet[letter][1:]:
                         cell.number_format = number_format
 

@@ -153,6 +153,26 @@ def build_current_season(season: int, week: int) -> tuple[pd.DataFrame, pd.DataF
     return completed, upcoming
 
 
+def build_full_season(season: int, last_week: int = 16) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Every regular-season game of a season in progress: played and still to play.
+
+    Loads weeks 1 through `last_week` with data.load_games_week. Finished weeks are
+    cached for good; weeks with unplayed games are re-fetched on each call (about one
+    API call per remaining week).
+
+    Args:
+        season: The season in progress.
+        last_week: Last regular-season week to load (conference title games are week 15).
+
+    Returns:
+        (completed, remaining): clean_games output for finished games and
+        clean_schedule output for unplayed ones.
+    """
+    raw = [data.load_games_week(season, w) for w in range(1, last_week + 1)]
+    raw = pd.concat([r for r in raw if not r.empty], ignore_index=True)
+    return clean_games(raw[_is_completed(raw)]), clean_schedule(raw)
+
+
 def consensus_lines(raw_lines: pd.DataFrame) -> pd.DataFrame:
     """Collapse betting lines to one closing spread per game, in our sign convention.
 

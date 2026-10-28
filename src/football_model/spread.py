@@ -378,3 +378,17 @@ def predict_upcoming(
     out["spread_pred"] = out["hfa"] + out["home_rating"] - out["away_rating"]
     out["games_in_fit"] = games_in_fit
     return out
+
+
+def season_fits(games: pd.DataFrame, params: SpreadParams) -> dict[int, pd.Series]:
+    """Each season's end-of-season fit (the next season's prior), keyed by season.
+
+    Args:
+        games: Completed games, several seasons.
+        params: Model settings.
+
+    Returns:
+        Dict of season -> fitted coefficients (home_field and team ratings).
+    """
+    _, fits = _walk_forward(games, params)
+    return fits

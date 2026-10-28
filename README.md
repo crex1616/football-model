@@ -111,6 +111,15 @@ After a week ends, score it:
 python scripts/score_week.py --week N   # model vs. market, season to date, biggest misses
 ```
 
+Then update the season odds (expected wins, bowl eligibility, conference titles, playoff):
+
+```bash
+python scripts/simulate_season.py --dry-run   # check the numbers
+python scripts/simulate_season.py             # save predictions/YYYY/season_odds_after_week_WW.csv
+```
+
+Commit the CSV; the `.xlsx` copy (one tab per conference) is not committed.
+
 ## Status
 
 | Phase | Status |
@@ -119,6 +128,6 @@ python scripts/score_week.py --week N   # model vs. market, season to date, bigg
 | 2. Elo baseline | Done |
 | 3. Point-spread regression | Done |
 | 4. Win probabilities | Done |
-| 5. Features and ML models | In progress (5a data done) |
-| 6. Season simulation | Not started |
+| 5. Features and ML models | In progress (5a, 5b done; 5c models next) |
+| 6. Season simulation | Done |
 | 7. Rankings | Not started |
