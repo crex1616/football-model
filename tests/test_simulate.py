@@ -257,3 +257,33 @@ def test_same_odds_detects_reproduced_snapshot():
 
     assert simulate.same_odds(old_snapshot, odds)
     assert not simulate.same_odds(old_snapshot.assign(p_playoff=0.5), odds)
+
+
+def test_resume_playoff_rule_fills_twelve_with_power_champions():
+    conferences, divisions, schedule = make_league()
+    completed, remaining = split_schedule(schedule, 3)
+
+    odds = run(completed, remaining, conferences, divisions)
+
+    assert odds["p_playoff_resume"].sum() == pytest.approx(simulate.PLAYOFF_TEAMS)
+    power = odds[odds["conference"].isin(simulate.POWER_CONFERENCES)]
+    assert (power["p_playoff_resume"] >= power["p_conf_champ"] - 1e-12).all()
+
+
+def test_odds_table_falls_back_for_old_snapshots():
+    conferences, divisions, schedule = make_league()
+    completed, remaining = split_schedule(schedule, 3)
+    odds = run(completed, remaining, conferences, divisions)
+
+    new = simulate.odds_table(odds).set_index("Team")
+    old = simulate.odds_table(odds.drop(columns=["p_playoff_resume", "p_9_wins"])).set_index("Team")
+
+    pd.testing.assert_series_equal(
+        new["Playoff"],
+        odds.set_index("team")["p_playoff_resume"].reindex(new.index),
+        check_names=False,
+    )
+    pd.testing.assert_series_equal(
+        old["Playoff"], odds.set_index("team")["p_playoff"].reindex(old.index), check_names=False
+    )
+    assert old["Playoff (record rule)"].isna().all()

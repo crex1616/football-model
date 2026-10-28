@@ -85,7 +85,8 @@ def main() -> None:
     by_conf = odds[odds["conference"] != simulate.INDEPENDENTS].groupby("conference")
     print(
         f"\nChecks: title odds per conference sum to {by_conf['p_conf_champ'].sum().round(3).unique()}, "
-        f"playoff odds sum to {odds['p_playoff'].sum():.2f}"
+        f"playoff odds sum to {odds['p_playoff_resume'].sum():.2f} (résumé rule) and "
+        f"{odds['p_playoff'].sum():.2f} (record rule)"
     )
 
     if args.dry_run:

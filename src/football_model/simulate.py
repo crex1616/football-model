@@ -25,8 +25,12 @@ Simplifications (documented so results are read honestly):
 - Tiebreakers: conference win %, then head-to-head for an exact two-team tie, then the
   higher simulated rating (a stand-in for the official multi-step procedures).
 - Playoff (2026 format, 12 teams): ACC, Big 12, Big Ten, SEC champions plus the best-
-  ranked champion of the other six conferences, plus 7 at-large. "Ranked" here means
-  fewest losses, then higher simulated rating, a rough proxy for the committee.
+  ranked champion of the other six conferences, plus 7 at-large. "Ranked" is a proxy
+  for the committee, two rules kept side by side:
+  - résumé (headline, p_playoff_resume): lowest strength of record (rankings.py), the
+    better match to the committee's final rankings (Spearman 0.904 vs. 0.790 on
+    2015-2024 excl. 2020; 2025 test 0.934 vs. 0.772; scripts/evaluate_rankings.py);
+  - record (p_playoff): fewest losses, then higher simulated rating.
 - Bowl eligibility: 6 wins, with at most one win over an FCS team counting.
 """
 
@@ -34,8 +38,9 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from scipy.stats import norm
 
-from football_model import config, predict, spread
+from football_model import config, predict, rankings, spread
 
 FCS_TEAM = spread.FCS_TEAM
 HOME_FIELD = spread.HOME_FIELD
@@ -237,7 +242,8 @@ def simulate_season(
     Returns:
         One row per FBS team: team, conference, wins, losses (so far), exp_regular_wins,
         exp_wins (including a title game), p_9_wins (9+ wins, title game included, bowls
-        not simulated), p_bowl, p_title_game, p_conf_champ, p_playoff.
+        not simulated), p_bowl, p_title_game, p_conf_champ, p_playoff (record rule),
+        p_playoff_resume (résumé rule, the headline).
     """
     divisions = divisions or {}
     rng = np.random.default_rng(seed)
@@ -301,6 +307,7 @@ def simulate_season(
 
     in_title_game = np.zeros((len(teams), n_sims), dtype=bool)
     champion = np.zeros((len(teams), n_sims), dtype=bool)
+    title_opponent = np.full((len(teams), n_sims), -1)  # for the résumé rule's SOR
 
     for conference in sorted(set(conferences.values()) - {INDEPENDENTS}):
         members = [t for t in teams if conferences[t] == conference]
@@ -312,6 +319,7 @@ def simulate_season(
             game = done.iloc[-1]
             a, b = t_pos[game["home_team"]], t_pos[game["away_team"]]
             in_title_game[[a, b], :] = True
+            title_opponent[a, :], title_opponent[b, :] = b, a
             champion[a if game["margin"] > 0 else b, :] = True
             continue
 
@@ -327,6 +335,7 @@ def simulate_season(
         sims = np.arange(n_sims)
         in_title_game[a, sims] = True
         in_title_game[b, sims] = True
+        title_opponent[a, sims], title_opponent[b, sims] = b, a
         margin = team_rating[a, sims] - team_rating[b, sims] + rng.normal(0.0, sigma_e, n_sims)
         winner = np.where(margin > 0, a, b)
         loser = np.where(margin > 0, b, a)
@@ -335,6 +344,15 @@ def simulate_season(
         losses[loser, sims] += 1
 
     playoff = _playoff_field(teams, conferences, champion, losses, team_rating)
+    sor = _simulated_sor(
+        pd.concat([regular_done, regular_left], ignore_index=True),
+        teams,
+        mean,
+        sigma_oos,
+        wins,
+        title_opponent,
+    )
+    playoff_resume = _playoff_field(teams, conferences, champion, losses, team_rating, score=sor)
     counted = wins - np.maximum(fcs_wins - 1, 0)
 
     current_w, current_l, _ = _completed_records(completed, teams)
@@ -351,8 +369,42 @@ def simulate_season(
             "p_title_game": in_title_game.mean(axis=1),
             "p_conf_champ": champion.mean(axis=1),
             "p_playoff": playoff.mean(axis=1),
+            "p_playoff_resume": playoff_resume.mean(axis=1),
         }
     )
+
+
+def _simulated_sor(
+    regular_schedule: pd.DataFrame,
+    teams: list[str],
+    mean: pd.Series,
+    sigma: float,
+    wins: np.ndarray,
+    title_opponent: np.ndarray,
+) -> np.ndarray:
+    """Strength of record (teams x sims) for each simulated final record.
+
+    The benchmark team (average of the power top 25, posterior-mean ratings) plays each
+    team's regular-season schedule; that win distribution is fixed, so SOR is a lookup
+    at the simulated win total. A title game is one more Bernoulli trial with win
+    probability p against that simulation's opponent (neutral site):
+    P(W >= w) = p * P_reg(W >= w - 1) + (1 - p) * P_reg(W >= w).
+
+    Simplification: the benchmark uses today's ratings, not ratings refit after the
+    simulated results.
+    """
+    benchmark = rankings.benchmark_rating(mean, teams)
+    max_wins = int(wins.max()) + 1
+    tails = rankings.schedule_tails(regular_schedule, teams, mean, sigma, benchmark, max_wins)
+    w = wins.astype(int)
+    rows = np.arange(len(teams))[:, None]
+    sor = tails[rows, w]
+    has_title = title_opponent >= 0
+    team_mean = mean[teams].to_numpy()
+    opp_rating = team_mean[np.where(has_title, title_opponent, 0)]
+    p = norm.cdf((benchmark - opp_rating) / sigma)
+    with_title = p * tails[rows, np.maximum(w - 1, 0)] + (1 - p) * sor
+    return np.where(has_title, with_title, sor)
 
 
 def _completed_records(
@@ -443,20 +495,23 @@ def _playoff_field(
     champion: np.ndarray,
     losses: np.ndarray,
     rating: np.ndarray,
+    score: np.ndarray | None = None,
 ) -> np.ndarray:
     """Playoff indicator (teams x sims) under the 2026 rule.
 
-    Rank: fewest losses, then higher simulated rating. Field: the four power-conference
+    Rank: lowest `score` (the résumé rule passes SOR; None means the record rule), then
+    fewest losses, then higher simulated rating. Field: the four power-conference
     champions, the best-ranked other champion, then the best-ranked others to 12.
     """
     n_teams, n_sims = champion.shape
+    score = losses if score is None else score
     power = np.array([conferences[t] in POWER_CONFERENCES for t in teams])
     other_conf = np.array(
         [conferences[t] not in POWER_CONFERENCES and conferences[t] != INDEPENDENTS for t in teams]
     )
     field = np.zeros((n_teams, n_sims), dtype=bool)
     for s in range(n_sims):
-        order = np.lexsort((-rating[:, s], losses[:, s]))
+        order = np.lexsort((-rating[:, s], losses[:, s], score[:, s]))
         chosen = set(np.flatnonzero(champion[:, s] & power))
         other_champs = [i for i in order if champion[i, s] and other_conf[i]]
         if other_champs:
@@ -477,6 +532,7 @@ ODDS_PERCENT_COLUMNS = [
     "Title game",
     "Win conference",
     "Playoff",
+    "Playoff (record rule)",
 ]
 ODDS_NUMBER_COLUMNS = ["Expected wins"]
 
@@ -510,22 +566,32 @@ def same_odds(saved: pd.DataFrame, new: pd.DataFrame) -> bool:
 def odds_table(odds: pd.DataFrame) -> pd.DataFrame:
     """Readable odds, best playoff odds first: team and record, then the probabilities.
 
-    Expected wins include a conference title game (bowls aren't simulated). Snapshots
-    saved before the 9+ column existed (2026 after week 8) show it blank.
+    Expected wins include a conference title game (bowls aren't simulated). "Playoff"
+    is the résumé rule, the better committee proxy; "Playoff (record rule)" is the
+    original one. Snapshots saved before those columns existed (2026 after week 8) show
+    9+ blank and the record rule as "Playoff".
     """
-    ordered = odds.sort_values(["p_playoff", "p_conf_champ", "exp_wins"], ascending=False)
-    nine = ordered["p_9_wins"] if "p_9_wins" in ordered.columns else float("nan")
+    odds = odds.copy()
+    if "p_9_wins" not in odds.columns:
+        odds["p_9_wins"] = float("nan")
+    if "p_playoff_resume" in odds.columns:
+        headline, other = odds["p_playoff_resume"], odds["p_playoff"]
+    else:
+        headline, other = odds["p_playoff"], pd.Series(float("nan"), index=odds.index)
+    odds = odds.assign(headline=headline, other=other)
+    ordered = odds.sort_values(["headline", "p_conf_champ", "exp_wins"], ascending=False)
     return pd.DataFrame(
         {
             "Team": ordered["team"],
             "Conference": ordered["conference"],
             "Record": [f"{w}-{l}" for w, l in zip(ordered["wins"], ordered["losses"])],
             "Expected wins": ordered["exp_wins"],
-            "Win 9+": nine,
+            "Win 9+": ordered["p_9_wins"],
             "Bowl eligible (6+)": ordered["p_bowl"],
             "Title game": ordered["p_title_game"],
             "Win conference": ordered["p_conf_champ"],
-            "Playoff": ordered["p_playoff"],
+            "Playoff": ordered["headline"],
+            "Playoff (record rule)": ordered["other"],
         }
     ).reset_index(drop=True)
 

@@ -161,6 +161,31 @@ Simulate the remaining schedule 10,000 times, applying tiebreakers and champions
 - **Power ranking:** sort by rating.
 - **Résumé ranking (strength of record):** probability an average top-25 team would match this record against the same schedule.
 
+**Built (Oct 28, 2026):** `rankings.py`, `scripts/rank_teams.py`, `scripts/evaluate_rankings.py`.
+
+- **Power:** the ridge rating, with a 90% interval from the posterior covariance
+  (standard error sigma_e * sqrt(U_ii)).
+- **Résumé:** the benchmark (average rating of the power top 25) plays each team's schedule.
+  Its win count is Poisson-binomial, computed exactly. SOR = P(benchmark wins >= the team's
+  wins), lower is better. Opponents are judged by today's ratings (the definition of SOR,
+  not leakage: a ranking predicts no past game).
+- **Validation vs. the committee's final ranking** (selection day: regular season and title
+  games, no bowls). Polls come from CFBD (`data.load_rankings`, 11 calls, cached).
+
+  | Rule | Spearman (top 25) | Top-4 overlap | Top-12 overlap | Mean abs. rank diff. |
+  |---|---|---|---|---|
+  | Record (fewest losses, then rating) | 0.790 | 0.750 | 0.778 | 5.51 |
+  | Power (rating) | 0.759 | 0.583 | 0.769 | 7.30 |
+  | **Résumé (SOR)** | **0.904** | **0.889** | **0.880** | **2.96** |
+  | AP poll, same week (human benchmark) | 0.971 | 0.944 | 0.954 | 1.22 |
+
+  Tuning seasons 2015-2024 excl. 2020. 2025 test (scored once): résumé 0.934, record
+  0.772, power 0.833, AP 0.966.
+- **Season simulation:** the résumé rule is now the headline playoff rule
+  (`p_playoff_resume`). The record rule is kept alongside (`p_playoff`). Each simulated
+  record's SOR is a lookup in the benchmark's fixed win distribution; a title game is one
+  more Bernoulli trial. Simplification: the benchmark uses today's ratings.
+
 ## Validation and evaluation
 
 - **Walk-forward validation** only; never random k-fold.

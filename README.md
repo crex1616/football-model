@@ -120,6 +120,16 @@ python scripts/simulate_season.py             # save predictions/YYYY/season_odd
 
 Commit the CSV; the `.xlsx` copy (one tab per conference) is not committed.
 
+And the rankings (power and résumé, compared with the AP poll and the committee):
+
+```bash
+python scripts/rank_teams.py --week N --dry-run   # check the top 25s
+python scripts/rank_teams.py --week N             # save predictions/YYYY/rankings_after_week_NN.csv
+```
+
+Commit the CSV; the `.xlsx` copy ("Résumé" and "Power" tabs, then one per conference) is
+not committed.
+
 ## Status
 
 | Phase | Status |
@@ -130,4 +140,4 @@ Commit the CSV; the `.xlsx` copy (one tab per conference) is not committed.
 | 4. Win probabilities | Done |
 | 5. Features and ML models | In progress (5a, 5b done; 5c models next) |
 | 6. Season simulation | Done |
-| 7. Rankings | Not started |
+| 7. Rankings | Done |

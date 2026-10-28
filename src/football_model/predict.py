@@ -386,6 +386,7 @@ def write_tabs(
     number_columns: list[str],
     freeze: str,
     highlight_columns: list[str] | None = None,
+    formats: dict[str, str] | None = None,
 ) -> None:
     """Write tables to one workbook, one sheet each: bold headers, fitted widths, formats.
 
@@ -397,6 +398,7 @@ def write_tabs(
         freeze: Top-left cell of the scrolling area (e.g. "C2" keeps row 1 and
             columns A-B in view).
         highlight_columns: Columns to emphasize (bold on a yellow fill).
+        formats: Other columns' Excel number formats, e.g. {"SOR": "0.0%"}.
     """
     from openpyxl.styles import Font, PatternFill
     from openpyxl.utils import get_column_letter
@@ -412,8 +414,11 @@ def write_tabs(
                 sheet[f"{letter}1"].font = Font(bold=True)
                 values = [str(v) for v in table[column]] + [column]
                 sheet.column_dimensions[letter].width = min(max(map(len, values)) + 2, 40)
+                number_format = None
                 if column in percent_columns or column in number_columns:
                     number_format = "0%" if column in percent_columns else "0.0"
+                number_format = (formats or {}).get(column, number_format)
+                if number_format:
                     for cell in sheet[letter][1:]:
                         cell.number_format = number_format
                 if column in (highlight_columns or []):
