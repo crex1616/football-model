@@ -7,8 +7,9 @@ Usage:
 
 Uses the live model (ridge ratings) fit on every game played so far. Saves a dated
 snapshot, predictions/YYYY/season_odds_after_week_WW.csv (commit it), and a readable
-.xlsx copy with one tab per conference. API calls: about one per week still to play
-(those weeks are re-fetched until final).
+.xlsx copy ("Playoff odds" tab, then one tab per conference). A saved CSV is never
+overwritten: if it exists and this run reproduces it, only the .xlsx is rebuilt.
+API calls: about one per week still to play (those weeks are re-fetched until final).
 """
 
 import argparse
@@ -64,7 +65,7 @@ def main() -> None:
     )
 
     table = simulate.odds_table(odds)
-    pct = ["Bowl eligible", "Title game", "Conference champ", "Playoff"]
+    pct = simulate.ODDS_PERCENT_COLUMNS
     shown = table.copy()
     shown[pct] = (shown[pct] * 100).round(1)
     shown["Expected wins"] = shown["Expected wins"].round(1)
@@ -75,9 +76,9 @@ def main() -> None:
         for conference, group in shown.groupby("Conference"):
             if conference == simulate.INDEPENDENTS:
                 continue
-            top = group.sort_values("Conference champ", ascending=False).head(3)
+            top = group.sort_values("Win conference", ascending=False).head(3)
             favorites = ", ".join(
-                f"{t} {p:.0f}" for t, p in zip(top["Team"], top["Conference champ"])
+                f"{t} {p:.0f}" for t, p in zip(top["Team"], top["Win conference"])
             )
             print(f"  {conference:18s} {favorites}")
 
@@ -91,9 +92,22 @@ def main() -> None:
         print("\nDry run: nothing saved.")
         return
     csv = simulate.odds_path(season, after_week)
+    xlsx = simulate.odds_path(season, after_week, ".xlsx")
+    if csv.exists():
+        # A saved snapshot is a forecast on record: never overwrite it. Rebuild the
+        # .xlsx only if this run reproduces the saved numbers.
+        if simulate.same_odds(pd.read_csv(csv), odds):
+            simulate.write_odds_excel(odds, xlsx)
+            print(f"\n{csv.name} is already saved and this run matches it. Rebuilt {xlsx}.")
+        else:
+            print(
+                f"\n{csv.name} is already saved and this run differs from it (more games "
+                "have finished). Nothing saved; rerun once the week is final."
+            )
+        return
     csv.parent.mkdir(parents=True, exist_ok=True)
     odds.to_csv(csv, index=False)
-    simulate.write_odds_excel(odds, simulate.odds_path(season, after_week, ".xlsx"))
+    simulate.write_odds_excel(odds, xlsx)
     print(f"\nSaved {csv} (commit it) and the .xlsx copy.")
 
 

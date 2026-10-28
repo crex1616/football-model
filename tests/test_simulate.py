@@ -200,3 +200,60 @@ def test_is_title_game_uses_notes_and_ignores_army_navy():
     # Labeled title game; Army-Navy (lone December conference game, 2024) is not one;
     # before 2022 a lone December conference game is inferred to be the title game.
     assert list(simulate.is_title_game(games)) == [True, False, True]
+
+
+def test_nine_wins_and_bowl_odds_are_consistent():
+    conferences, divisions, schedule = make_league()
+    completed, remaining = split_schedule(schedule, 3)
+
+    odds = run(completed, remaining, conferences, divisions)
+
+    # Teams play at most 4 games here, so nobody can reach 9 or 6 wins.
+    assert (odds["p_9_wins"] == 0).all()
+    assert (odds["p_bowl"] == 0).all()
+    assert (odds["p_9_wins"] <= odds["p_bowl"]).all()
+
+
+def test_odds_tabs_layout():
+    conferences, divisions, schedule = make_league()
+    completed, remaining = split_schedule(schedule, 3)
+    odds = run(completed, remaining, conferences, divisions)
+
+    tabs = simulate.odds_tabs(odds)
+
+    assert list(tabs) == ["Playoff odds", *CONFERENCES, simulate.INDEPENDENTS]
+    playoff = tabs["Playoff odds"]
+    assert list(playoff["Rank"]) == list(range(1, len(odds) + 1))
+    assert playoff["Playoff"].is_monotonic_decreasing
+    sec = tabs["SEC"]
+    assert "Conference" not in sec.columns
+    assert sec["Win conference"].is_monotonic_decreasing
+    assert {"Expected wins", "Win 9+", "Bowl eligible (6+)"} <= set(sec.columns)
+    assert "Win conference" not in tabs[simulate.INDEPENDENTS].columns
+
+
+def test_write_odds_excel_highlights_expected_wins(tmp_path):
+    from openpyxl import load_workbook
+
+    conferences, divisions, schedule = make_league()
+    completed, remaining = split_schedule(schedule, 3)
+    odds = run(completed, remaining, conferences, divisions)
+    path = tmp_path / "odds.xlsx"
+
+    simulate.write_odds_excel(odds, path)
+
+    sheet = load_workbook(path)["SEC"]
+    headers = [c.value for c in sheet[1]]
+    wins_col = headers.index("Expected wins") + 1
+    assert sheet.cell(2, wins_col).fill.fgColor.rgb.endswith("FFF2CC")
+    assert sheet.cell(2, headers.index("Playoff") + 1).number_format == "0%"
+
+
+def test_same_odds_detects_reproduced_snapshot():
+    conferences, divisions, schedule = make_league()
+    completed, remaining = split_schedule(schedule, 3)
+    odds = run(completed, remaining, conferences, divisions)
+    old_snapshot = odds.drop(columns="p_9_wins")  # saved before the column existed
+
+    assert simulate.same_odds(old_snapshot, odds)
+    assert not simulate.same_odds(old_snapshot.assign(p_playoff=0.5), odds)

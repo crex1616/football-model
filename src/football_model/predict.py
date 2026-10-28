@@ -385,6 +385,7 @@ def write_tabs(
     percent_columns: list[str],
     number_columns: list[str],
     freeze: str,
+    highlight_columns: list[str] | None = None,
 ) -> None:
     """Write tables to one workbook, one sheet each: bold headers, fitted widths, formats.
 
@@ -395,8 +396,9 @@ def write_tabs(
         number_columns: Columns shown with one decimal.
         freeze: Top-left cell of the scrolling area (e.g. "C2" keeps row 1 and
             columns A-B in view).
+        highlight_columns: Columns to emphasize (bold on a yellow fill).
     """
-    from openpyxl.styles import Font
+    from openpyxl.styles import Font, PatternFill
     from openpyxl.utils import get_column_letter
 
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -414,6 +416,10 @@ def write_tabs(
                     number_format = "0%" if column in percent_columns else "0.0"
                     for cell in sheet[letter][1:]:
                         cell.number_format = number_format
+                if column in (highlight_columns or []):
+                    for cell in sheet[letter]:
+                        cell.fill = PatternFill("solid", fgColor="FFF2CC")
+                        cell.font = Font(bold=True)
 
 
 def results_path(season: int, week: int) -> Path:

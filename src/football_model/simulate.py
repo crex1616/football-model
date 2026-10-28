@@ -44,6 +44,7 @@ POWER_CONFERENCES = ("ACC", "Big 12", "Big Ten", "SEC")
 FIRST_SEASON_WITH_NOTES = 2022  # CFBD labels title games in `notes` from here on
 PLAYOFF_TEAMS = 12
 BOWL_WINS = 6
+NINE_WINS = 9
 RIDGE = spread.SpreadParams()  # the live model: plain ridge
 # A conference this small has no title game or champion here (the 2024 Pac-12 had two).
 MIN_CONFERENCE_SIZE = 4
@@ -235,7 +236,8 @@ def simulate_season(
 
     Returns:
         One row per FBS team: team, conference, wins, losses (so far), exp_regular_wins,
-        exp_wins (including a title game), p_bowl, p_title_game, p_conf_champ, p_playoff.
+        exp_wins (including a title game), p_9_wins (9+ wins, title game included, bowls
+        not simulated), p_bowl, p_title_game, p_conf_champ, p_playoff.
     """
     divisions = divisions or {}
     rng = np.random.default_rng(seed)
@@ -344,6 +346,7 @@ def simulate_season(
             "losses": current_l.astype(int),
             "exp_regular_wins": regular_wins.mean(axis=1),
             "exp_wins": wins.mean(axis=1),
+            "p_9_wins": (wins >= NINE_WINS).mean(axis=1),
             "p_bowl": (counted >= BOWL_WINS).mean(axis=1),
             "p_title_game": in_title_game.mean(axis=1),
             "p_conf_champ": champion.mean(axis=1),
@@ -468,7 +471,13 @@ def _playoff_field(
 
 # --- Output -------------------------------------------------------------------------
 
-ODDS_PERCENT_COLUMNS = ["Bowl eligible", "Title game", "Conference champ", "Playoff"]
+ODDS_PERCENT_COLUMNS = [
+    "Win 9+",
+    "Bowl eligible (6+)",
+    "Title game",
+    "Win conference",
+    "Playoff",
+]
 ODDS_NUMBER_COLUMNS = ["Expected wins"]
 
 
@@ -478,28 +487,83 @@ def odds_path(season: int, after_week: int, suffix: str = ".csv") -> Path:
     return config.PREDICTIONS_DIR / str(season) / name
 
 
+def same_odds(saved: pd.DataFrame, new: pd.DataFrame) -> bool:
+    """True if a new simulation reproduces a saved snapshot on every column they share.
+
+    Used to rebuild a snapshot's .xlsx (for example with a new column) without editing
+    the saved CSV: same games played and same seed give the same numbers.
+    """
+    shared = [c for c in saved.columns if c in new.columns]
+    if len(saved) != len(new) or not shared:
+        return False
+    for column in shared:
+        a = saved[column].reset_index(drop=True)
+        b = new[column].reset_index(drop=True)
+        if pd.api.types.is_numeric_dtype(a) and pd.api.types.is_numeric_dtype(b):
+            if not np.allclose(a, b):
+                return False
+        elif not a.astype(str).equals(b.astype(str)):
+            return False
+    return True
+
+
 def odds_table(odds: pd.DataFrame) -> pd.DataFrame:
-    """Readable odds, best playoff odds first: team and record, then the probabilities."""
+    """Readable odds, best playoff odds first: team and record, then the probabilities.
+
+    Expected wins include a conference title game (bowls aren't simulated). Snapshots
+    saved before the 9+ column existed (2026 after week 8) show it blank.
+    """
     ordered = odds.sort_values(["p_playoff", "p_conf_champ", "exp_wins"], ascending=False)
+    nine = ordered["p_9_wins"] if "p_9_wins" in ordered.columns else float("nan")
     return pd.DataFrame(
         {
             "Team": ordered["team"],
             "Conference": ordered["conference"],
             "Record": [f"{w}-{l}" for w, l in zip(ordered["wins"], ordered["losses"])],
             "Expected wins": ordered["exp_wins"],
-            "Bowl eligible": ordered["p_bowl"],
+            "Win 9+": nine,
+            "Bowl eligible (6+)": ordered["p_bowl"],
             "Title game": ordered["p_title_game"],
-            "Conference champ": ordered["p_conf_champ"],
+            "Win conference": ordered["p_conf_champ"],
             "Playoff": ordered["p_playoff"],
         }
     ).reset_index(drop=True)
 
 
-def write_odds_excel(odds: pd.DataFrame, path: Path) -> None:
-    """Excel copy of the odds: an "All teams" tab, then one tab per conference."""
+def odds_tabs(odds: pd.DataFrame) -> dict[str, pd.DataFrame]:
+    """Split odds_table into tabs: "Playoff odds" for every team, then one per conference.
+
+    The playoff tab is ranked by playoff odds. Each conference tab is ranked by odds to
+    win the conference and leaves out the (repeated) conference column; the
+    independents' tab also leaves out the title-game columns, since they have none.
+    """
     table = odds_table(odds)
-    tabs = {"All teams": table}
-    for conference in sorted(table["Conference"].unique()):
+    tabs = {"Playoff odds": table.assign(Rank=range(1, len(table) + 1))}
+    tabs["Playoff odds"] = tabs["Playoff odds"][["Rank", *table.columns]]
+    # Conferences alphabetically, independents last.
+    for conference in sorted(table["Conference"].unique(), key=lambda c: (c == INDEPENDENTS, c)):
+        rows = table[table["Conference"] == conference]
+        rows = rows.sort_values(["Win conference", "Expected wins"], ascending=False)
+        rows = rows.drop(columns="Conference")
+        if conference == INDEPENDENTS:
+            rows = rows.drop(columns=["Title game", "Win conference"])
+        # Excel sheet names: at most 31 characters, no / \ ? * [ ] :
         name = "".join(ch for ch in conference if ch not in "/\\?*[]:")[:31]
-        tabs[name] = table[table["Conference"] == conference].reset_index(drop=True)
-    predict.write_tabs(tabs, path, ODDS_PERCENT_COLUMNS, ODDS_NUMBER_COLUMNS, freeze="B2")
+        tabs[name] = rows.reset_index(drop=True)
+    return tabs
+
+
+def write_odds_excel(odds: pd.DataFrame, path: Path) -> None:
+    """Excel copy of the odds: a "Playoff odds" tab, then one tab per conference.
+
+    Styled like the weekly predictions workbook (bold headers, fitted widths, whole
+    percents), with the expected-wins column highlighted. The CSV stays the record.
+    """
+    predict.write_tabs(
+        odds_tabs(odds),
+        path,
+        ODDS_PERCENT_COLUMNS,
+        ODDS_NUMBER_COLUMNS,
+        freeze="B2",
+        highlight_columns=["Expected wins"],
+    )
