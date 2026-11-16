@@ -6,8 +6,11 @@ Usage:
 Reads predictions/YYYY/week_WW.csv (never changes it) and the week's games and lines
 from data/raw/ (re-fetched only while the week is unfinished: about 2 API calls the
 first run after the week is over, then none). Prints model vs. market for the week and
-the season so far, plus the biggest misses. Once every game is final, writes
-predictions/YYYY/week_WW_results.csv; while games remain, it only prints.
+the season so far, the biggest misses, and the games where we disagreed most with the
+closing line. Once every game is final, writes predictions/YYYY/week_WW_results.csv
+(once; the record) and week_WW_results.xlsx (rebuilt each run; not committed): a
+Summary tab, every game ranked by our miss, and the same games ranked by gap from the
+market. While games remain, it only prints.
 """
 
 import argparse
@@ -40,17 +43,33 @@ def main() -> None:
 
     print("\nThis week (games with a closing line):")
     print(predict.summarize_scores(scored).round(3).to_string())
-    ats = scored["ats_result"].value_counts()
-    record = f"{ats.get('win', 0)}-{ats.get('loss', 0)}-{ats.get('push', 0)}"
-    print(f"Ridge against the closing line: {record} (for reading only; noisy)")
 
     shadow = predict.shadow_comparison(scored)
     if not shadow.empty:
         print("\nShadow check: live ridge vs. the Phase 5b stack, same games:")
         print(shadow.round(3).to_string())
 
-    print("\nBiggest misses (ridge):")
-    print(predict.biggest_misses(scored).to_string(index=False))
+    print("\nThe week at a glance:")
+    print(predict.results_summary(scored).to_string(index=False, header=False))
+
+    table = predict.results_table(scored)
+    shown = [
+        "Matchup",
+        "Final",
+        "Our line",
+        "Market line",
+        "Gap (pts)",
+        "We leaned",
+        "Lean result",
+        "Our miss (pts)",
+        "Market miss (pts)",
+        "Closer",
+    ]
+    print("\nBiggest misses (ours), worst first:")
+    print(table[shown].head(10).round(1).to_string(index=False))
+    print("\nWhere we disagreed most with the closing line:")
+    by_gap = table.sort_values("Gap (pts)", ascending=False, na_position="last")
+    print(by_gap[shown].head(10).round(1).to_string(index=False))
 
     path = predict.results_path(season, args.week)
     if n_final < len(preds):
@@ -60,6 +79,10 @@ def main() -> None:
     else:
         scored.to_csv(path, index=False)
         print(f"\nSaved {path}")
+    if n_final == len(preds):
+        excel = predict.results_excel_path(season, args.week)
+        predict.write_results_excel(scored, excel)
+        print(f"Saved readable copy (summary, by miss, by gap) to {excel}")
 
     files = sorted(path.parent.glob("week_*_results.csv"))
     if files:

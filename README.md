@@ -104,11 +104,12 @@ Each week gets two files in `predictions/YYYY/`:
 | `week_NN.csv` | **The permanent record.** Committed before kickoff; never edit or delete it. Scoring reads this file. From week 10 of 2026 it also holds the Phase 5b stack as a *shadow* model (`stack_spread`, `stack_home_win_prob`): recorded for an honest test, not the live pick. |
 | `week_NN.xlsx` | The readable copy: one tab per conference, lines first, raw numbers last. Not committed; rebuild with `python scripts/export_predictions.py --week N`. |
 | `week_NN_results.csv` | Written by `python scripts/score_week.py --week N` once every game is final: predictions joined to scores and the closing line. Commit it. |
+| `week_NN_results.xlsx` | The readable results, rebuilt each time `score_week.py` runs on a finished week. Not committed. Tabs: **Summary** (who was closer, lean record, model vs. market metrics), **By miss** (every game, worst miss first: our line, market line, the gap between them, which side we leaned and whether it covered), **By gap** (same rows, biggest disagreement with the market first). |
 
 After a week ends, score it:
 
 ```bash
-python scripts/score_week.py --week N   # model vs. market, season to date, biggest misses
+python scripts/score_week.py --week N   # model vs. market, biggest misses, biggest gaps from the market
 ```
 
 Then update the season odds (expected wins, bowl eligibility, conference titles, playoff):

@@ -167,6 +167,7 @@ def make_scoring_inputs() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
             "huber_spread": [9.0, -11.0, 24.0],
             "huber_home_win_prob": [0.75, 0.25, 0.9],
             "market_spread": [7.0, -6.5, 23.5],
+            "neutral_site": [False, False, False],
         }
     )
     results = pd.DataFrame(
@@ -211,16 +212,38 @@ def test_summarize_scores_matches_hand_calculation():
     assert summary.loc["market (closing)", "mae"] == pytest.approx((4.5 + 13.0) / 2)
 
 
-def test_biggest_misses_readable():
+def test_results_table_ranks_by_miss_and_shows_gap_and_lean():
     preds, results, closing = make_scoring_inputs()
     scored = predict.score_predictions(preds, results, closing, market_sigma=15.0)
 
-    misses = predict.biggest_misses(scored, n=1)
+    table = predict.results_table(scored)
 
-    assert misses.loc[0, "Matchup"] == "Ohio State @ USC"
-    assert misses.loc[0, "Predicted line"] == "Ohio State -12.0"
-    assert misses.loc[0, "Final"] == "Ohio State 24, USC 31"
-    assert misses.loc[0, "Missed by"] == 19.0
+    # Game 2 (missed by 19) ranks above game 1 (missed by 7).
+    assert list(table["Matchup"]) == ["Ohio State @ USC", "Boston College @ Duke"]
+    worst = table.iloc[0]
+    assert worst["Miss rank"] == 1
+    assert worst["Our line"] == "Ohio State -12.0"
+    assert worst["Market line"] == "Ohio State -6.0"
+    assert worst["Gap (pts)"] == pytest.approx(6.0)  # |-12 - (-6)|
+    assert worst["We leaned"] == "Ohio State"  # we expected a smaller home margin
+    assert worst["Lean result"] == "Loss"  # USC won outright
+    assert worst["Our miss (pts)"] == 19.0
+    assert worst["Market miss (pts)"] == 13.0
+    assert worst["Closer"] == "Market"
+    assert worst["Final"] == "Ohio State 24, USC 31"
+    assert table.iloc[1]["We leaned"] == "Duke"  # 10 > 7.5: we liked the home team
+
+
+def test_results_summary_counts():
+    preds, results, closing = make_scoring_inputs()
+    scored = predict.score_predictions(preds, results, closing, market_sigma=15.0)
+
+    summary = dict(zip(*predict.results_summary(scored, min_gap=3.0).T.values))
+
+    assert summary["Our average miss (pts)"] == "13.0"  # (19 + 7) / 2
+    assert summary["Closer to the final: us / market / tie"] == "0 / 2 / 0"
+    assert summary["Lean record vs. closing line (W-L-P)"] == "0-2-0"
+    assert summary["Lean record when gap >= 3 pts (1 games)"] == "0-1-0"  # only game 2
 
 
 def test_excel_table_handles_files_saved_before_the_shadow_stack():

@@ -550,21 +550,151 @@ def _score_table(games: pd.DataFrame, compared: dict[str, tuple[str, str]]) -> p
     return pd.DataFrame.from_dict(rows, orient="index")
 
 
-def biggest_misses(scored: pd.DataFrame, n: int = 5) -> pd.DataFrame:
-    """The n games the ridge model missed by the most points, in readable form."""
-    order = scored["ridge_error"].abs().sort_values(ascending=False).index[:n]
+def results_excel_path(season: int, week: int) -> Path:
+    """predictions/{season}/week_{WW}_results.xlsx (a readable copy of the results CSV)."""
+    return results_path(season, week).with_suffix(".xlsx")
+
+
+def _lean(model_spread: float, line: float, home_team: str, away_team: str) -> str:
+    """The team the model liked against the line: home if it expected a bigger home margin."""
+    if pd.isna(line) or model_spread == line:
+        return "-"
+    return home_team if model_spread > line else away_team
+
+
+def results_table(scored: pd.DataFrame) -> pd.DataFrame:
+    """One readable row per finished game: our line vs. the closing line vs. what happened.
+
+    Rows are ranked by how far the ridge line missed the final margin (1 = worst miss).
+
+    Gap is |ridge spread - closing spread|: how far we disagreed with the market, in
+    points. "We leaned" is the side that disagreement favored, and "Lean result" says
+    whether that side covered the closing line (ats_result). "Closer" says whose line
+    landed nearer the final margin. A game without a closing line has no gap or lean.
+
+    Args:
+        scored: score_predictions output (or a saved results CSV).
+
+    Returns:
+        New DataFrame with display column names, worst miss first.
+    """
+    has_stack = "stack_spread" in scored.columns and scored["stack_spread"].notna().any()
+    ranked = scored.assign(_miss=scored["ridge_error"].abs()).sort_values(
+        "_miss", ascending=False, kind="stable"
+    )
     rows = []
-    for game in scored.loc[order].itertuples():
-        rows.append(
-            {
-                "Matchup": f"{game.away_team} @ {game.home_team}",
-                "Predicted line": format_line(game.ridge_spread, game.home_team, game.away_team),
-                "Closing line": format_line(
-                    game.closing_spread, game.home_team, game.away_team, exact=True
-                ),
-                "Final": f"{game.away_team} {game.away_points}, "
-                f"{game.home_team} {game.home_points}",
-                "Missed by": round(abs(game.ridge_error), 1),
-            }
-        )
+    for rank, game in enumerate(ranked.itertuples(), start=1):
+        home, away = game.home_team, game.away_team
+        our_miss = abs(game.ridge_error)
+        market_miss = abs(game.closing_error)
+        if pd.isna(market_miss):
+            closer = "-"
+        elif round(our_miss, 1) == round(market_miss, 1):
+            closer = "Tie"
+        else:
+            closer = "Us" if our_miss < market_miss else "Market"
+        winner = home if game.margin > 0 else away
+        row = {
+            "Miss rank": rank,
+            "Matchup": f"{away} {'vs' if game.neutral_site else '@'} {home}",
+            "Final": f"{away} {game.away_points}, {home} {game.home_points}",
+            "Our line": format_line(game.ridge_spread, home, away),
+            "Market line": format_line(game.closing_spread, home, away, exact=True),
+            "Gap (pts)": abs(game.ridge_spread - game.closing_spread),
+            "We leaned": _lean(game.ridge_spread, game.closing_spread, home, away),
+            "Lean result": game.ats_result.capitalize(),
+            "Our miss (pts)": our_miss,
+            "Market miss (pts)": market_miss,
+            "Closer": closer,
+            "Winner": winner,
+            "Picked winner": "Yes" if game.picked_winner else "No",
+            # Signed numbers, our convention (+ = home), for anyone checking the math.
+            "Final margin (home)": game.margin,
+            "Our spread (home)": game.ridge_spread,
+            "Market spread (home)": game.closing_spread,
+        }
+        if has_stack:
+            row["Stack line (shadow)"] = format_line(game.stack_spread, home, away)
+            row["Stack miss (pts)"] = abs(game.stack_error)
+        rows.append(row)
     return pd.DataFrame(rows)
+
+
+def results_summary(scored: pd.DataFrame, min_gap: float = 3.0) -> pd.DataFrame:
+    """Headline counts for the week: who was closer, picks, and the lean record.
+
+    The lean record is also split out for games where we disagreed with the closing
+    line by at least min_gap points: if the model knows something the market doesn't,
+    it should show up there first (noisy over one week; read across many).
+
+    Returns:
+        Two columns, "Measure" and "Value", as strings.
+    """
+    table = results_table(scored)
+    lined = table[table["Market line"] != "-"]
+    big = lined[lined["Gap (pts)"] >= min_gap]
+
+    def record(rows: pd.DataFrame) -> str:
+        counts = rows["Lean result"].value_counts()
+        return f"{counts.get('Win', 0)}-{counts.get('Loss', 0)}-{counts.get('Push', 0)}"
+
+    closer = lined["Closer"].value_counts()
+    measures = {
+        "Games scored": len(table),
+        "Games with a closing line": len(lined),
+        "Our average miss (pts)": f"{table['Our miss (pts)'].mean():.1f}",
+        "Market average miss (pts)": f"{lined['Market miss (pts)'].mean():.1f}",
+        "Average gap from market (pts)": f"{lined['Gap (pts)'].mean():.1f}",
+        "Closer to the final: us / market / tie": (
+            f"{closer.get('Us', 0)} / {closer.get('Market', 0)} / {closer.get('Tie', 0)}"
+        ),
+        "Winners picked": f"{(table['Picked winner'] == 'Yes').sum()} of {len(table)}",
+        "Lean record vs. closing line (W-L-P)": record(lined),
+        f"Lean record when gap >= {min_gap:g} pts ({len(big)} games)": record(big),
+    }
+    return pd.DataFrame({"Measure": list(measures), "Value": [str(v) for v in measures.values()]})
+
+
+RESULTS_NUMBER_COLUMNS = [
+    "Gap (pts)",
+    "Our miss (pts)",
+    "Market miss (pts)",
+    "Our spread (home)",
+    "Market spread (home)",
+    "Stack miss (pts)",
+]
+
+
+def write_results_excel(scored: pd.DataFrame, path: Path) -> None:
+    """Write a week's results as a workbook: summary, games by miss, games by gap.
+
+    Tabs:
+        Summary: results_summary, then model vs. market metrics (summarize_scores).
+        By miss: every game, worst ridge miss first.
+        By gap: the same rows, biggest disagreement with the market first.
+
+    A readable copy of the results CSV (the record), so it can be rebuilt at any time.
+    """
+    table = results_table(scored)
+    by_gap = table.sort_values("Gap (pts)", ascending=False, na_position="last")
+    metrics = summarize_scores(scored).round(3).reset_index(names="Model")
+    tabs = {"Summary": results_summary(scored), "By miss": table, "By gap": by_gap}
+    write_tabs(
+        tabs,
+        path,
+        percent_columns=[],
+        number_columns=RESULTS_NUMBER_COLUMNS,
+        freeze="C2",
+        highlight_columns=["Gap (pts)", "Our miss (pts)"],
+    )
+    # The metrics table goes under the summary, two rows down.
+    from openpyxl import load_workbook
+
+    workbook = load_workbook(path)
+    sheet = workbook["Summary"]
+    start = sheet.max_row + 3
+    for j, column in enumerate(metrics.columns, start=1):
+        sheet.cell(row=start, column=j, value=column).font = sheet["A1"].font.copy()
+        for i, value in enumerate(metrics[column], start=1):
+            sheet.cell(row=start + i, column=j, value=value)
+    workbook.save(path)
